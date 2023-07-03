@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlglot import exp, generator, tokens
+from sqlglot import exp, generator, parser, tokens
 from sqlglot.dialects.dialect import Dialect
 from sqlglot.tokens import Tokenizer, TokenType
 
@@ -8,7 +8,7 @@ from sqlglot.tokens import Tokenizer, TokenType
 class NuoDB(Dialect):
     # * Refer to http://nuocrucible/browse/NuoDB/Omega/Parser/SQL.l?r=5926eff6ff3e077c09c390c7acc4649c81b1d27b&r=daafc63d9399e66689d0990a893fbddd115df89f&r=6ef1d2d9e253f74515bf89625434b605be6486ea
     # ? Revise so all tokens are considered
-    # ? Built-in Function Names excluded
+    # ? Built-in Function Names excluded for now
     class Tokenizer(tokens.Tokenizer):
         QUOTES = [
             "'",
@@ -39,6 +39,7 @@ class NuoDB(Dialect):
             "END_TRIGGER": TokenType.END_TRIGGER,
             "END_TRY": TokenType.END_TRY,
             "END_WHILE": TokenType.END_WHILE,
+            "EXCLUSIVE": TokenType.EXCLUSIVE,
             "FOREIGN": TokenType.FOREIGN,  # ? Separate keyword from FOREIGN KEY?
             "GENERATED": TokenType.GENERATED,
             "GROUP": TokenType.GROUP,  # ? Separate keyword from GROUP BY?
@@ -54,7 +55,7 @@ class NuoDB(Dialect):
             "ONLY": TokenType.ONLY,
             # ORDER #? ORDER BY is included
             "OUT": TokenType.OUT,
-            # PRIMARY #? PRIMARY KEY is included
+            # PRIMARY #? PRIMARY KEY is included generic dialect
             "RECORD_BATCHING": TokenType.RECORD_BATCHING,
             "RECORD_NUMBER": TokenType.RECORD_NUMBER,
             "RESTRICT": TokenType.RESTRICT,
@@ -73,33 +74,58 @@ class NuoDB(Dialect):
             "_RECORD_TRANSACTION": TokenType._RECORD_TRANSACTION,
         }
 
-        # ? COMMANDS?
+    class Parser(parser.Parser):
+        STATEMENT_PARSERS = {
+            **parser.Parser.STATEMENT_PARSERS,
+            TokenType.LOCK: lambda self: self._parse_lock_table(),
+        }
+
+        # LOCK {TABLE} name [ EXCLUSIVE ];
+        def _parse_lock_table(self) -> exp.ExclusiveLock:
+            self._match(TokenType.LOCK)
+            lock = self._prev.text.upper()
+            table = None
+            if self._match(TokenType.TABLE):
+                table = self._prev.text.upper()
+            tbl_name = self._parse_id_var()
+            exclusive = None
+            if self._match(TokenType.EXCLUSIVE):
+                exclusive = self._prev.text.upper()
+            return self.expression(
+                exp.ExclusiveLock, this=lock, kind=table, tbl_name=tbl_name, lock_type=exclusive
+            )
 
     class Generator(generator.Generator):
-        # TRANSFORMS = {exp.Array: lambda self, e: f"[{self.expressions(e)}]"}
         TRANSFORMS = {**generator.Generator.TRANSFORMS}
-
-        TYPE_MAPPING = generator.Generator.TYPE_MAPPING.copy()
-
-        TYPE_MAPPING = {**generator.Generator.TYPE_MAPPING, exp.DataType.Type.MEDIUMINT: "NUMBER"}
-        # ? Should all of these datatypes that NuoDB doesn't support be popped?
-        # ? Seems like updating the TYPE_MAPPING such as the following is a good approach
-        """
         TYPE_MAPPING = {
-            exp.DataType.Type.TINYINT: "INT64",
-            exp.DataType.Type.SMALLINT: "INT64",
-            exp.DataType.Type.INT: "INT64",
-            exp.DataType.Type.BIGINT: "INT64",
-            exp.DataType.Type.DECIMAL: "NUMERIC",
-            exp.DataType.Type.FLOAT: "FLOAT64",
-            exp.DataType.Type.DOUBLE: "FLOAT64",
-            exp.DataType.Type.BOOLEAN: "BOOL",
-            exp.DataType.Type.TEXT: "STRING",
+            **generator.Generator.TYPE_MAPPING,
+            exp.DataType.Type.MEDIUMINT: "NUMBER",  # ? Confirm NUMBER is most appropriate, and not
+            exp.DataType.Type.TINYBLOB: "BLOB",  # ? Confirm NUMBER is most appropriate, and not
+            exp.DataType.Type.TINYTEXT: "VARCHAR(255)"
+            # ? Revise below and add
+            # exp.DataType.Type.TINYINT: "INT64",
+            # exp.DataType.Type.SMALLINT: "INT64",
+            # exp.DataType.Type.INT: "INT64",
+            # exp.DataType.Type.BIGINT: "INT64",
+            # exp.DataType.Type.DECIMAL: "NUMERIC",
+            # exp.DataType.Type.FLOAT: "FLOAT64",
+            # exp.DataType.Type.DOUBLE: "FLOAT64",
+            # exp.DataType.Type.BOOLEAN: "BOOL",
+            # exp.DataType.Type.TEXT: "STRING",
         }
-        """
+
+        def exclusivelock_sql(self, expression: exp.ExclusiveLock) -> str:
+            kind = self.sql(expression, "kind")
+            kind = f" TABLE" if kind == "TABLES" else ""
+            tbl_name = self.sql(expression, "tbl_name")
+            tbl_name = f" {tbl_name}" if tbl_name else ""
+            lock_type = self.sql(expression, "lock_type")
+            lock_type = f" EXCLUSIVE" if lock_type in ["WRITE", "READ"] else ""
+            return f"LOCK{kind}{tbl_name}{lock_type}"
+
+        # ? Should all of these datatypes that NuoDB doesn't support be popped?
         # TYPE_MAPPING.pop(exp.DataType.Type.BIGDECIMAL)
         # TYPE_MAPPING.pop(exp.DataType.Type.BIGSERIAL)
-        # ? BIT == BYTE ?
         # TYPE_MAPPING.pop(exp.DataType.Type.DATETIME)
         # TYPE_MAPPING.pop(exp.DataType.Type.DATETIME64)
         # TYPE_MAPPING.pop(exp.DataType.Type.ENUM)
@@ -119,4 +145,4 @@ class NuoDB(Dialect):
         # TYPE_MAPPING.pop(exp.DataType.Type.GEOGRAPHY)
         # TYPE_MAPPING.pop(exp.DataType.Type.GEOMETRY)
         # TYPE_MAPPING.pop(exp.DataType.Type.HLLSKETCH)
-        # ? STILL NEED TO ADD OTHERS
+        # ? OTHERS TO BE ADDED

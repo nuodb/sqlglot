@@ -45,6 +45,16 @@ class TestMySQL(Validator):
                 "mysql": "CREATE TABLE `foo` (`id` CHAR(36) NOT NULL DEFAULT (UUID()), PRIMARY KEY (`id`), UNIQUE `id` (`id`))",
             },
         )
+        self.validate_all(
+            "CREATE TABLE `datatypes1` (`c6` mediumint(9) NOT NULL DEFAULT '0')",
+            read="mysql",
+            write={"nuodb": "CREATE TABLE `datatypes1` (`c6` INTEGER(9) NOT NULL DEFAULT '0')"},
+        )
+        self.validate_all(
+            "CREATE TABLE `datatypes1` (`c14` tinyblob)",
+            read="mysql",
+            write={"nuodb": "CREATE TABLE `datatypes1` (`c14` BLOB)"},
+        )
 
     def test_identity(self):
         self.validate_identity("CAST(x AS ENUM('a', 'b'))")
@@ -138,6 +148,16 @@ class TestMySQL(Validator):
             write={
                 "spark": "CAST(x AS BLOB) + CAST(y AS BLOB)",
             },
+        )
+        self.validate_all(
+            "CREATE TABLE `datatypes3` (`c1` tinytext)",
+            read={"mysql": "CREATE TABLE `datatypes3` (`c1` tinytext)"},
+            write={"nuodb": "CREATE TABLE `datatypes3` (`c1` VARCHAR(255))"},
+        )
+        self.validate_all(
+            "CREATE TABLE `datatypes1` (`c14` tinyblob)",
+            read={"mysql": "CREATE TABLE `datatypes1` (`c14` tinyblob)"},
+            write={"nuodb": "CREATE TABLE `datatypes1` (`c14` BLOB)"},
         )
 
     def test_canonical_functions(self):
@@ -733,3 +753,10 @@ COMMENT='客户账户表'"""
 
         cmd = self.parse_one("SET x = 1, y = 2")
         self.assertEqual(len(cmd.expressions), 2)
+
+    def test_lock_tables(self):
+        self.validate_all(
+            "LOCK TABLES `datatypes1` WRITE",
+            read="mysql",
+            write={"nuodb": "LOCK TABLE `datatypes1` EXCLUSIVE"},
+        )

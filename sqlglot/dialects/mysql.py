@@ -125,14 +125,17 @@ class MySQL(Dialect):
             "CHARSET": TokenType.CHARACTER_SET,
             "FORCE": TokenType.FORCE,
             "IGNORE": TokenType.IGNORE,
+            "TINYBLOB": TokenType.TINYBLOB,
             "LONGBLOB": TokenType.LONGBLOB,
             "LONGTEXT": TokenType.LONGTEXT,
             "MEDIUMBLOB": TokenType.MEDIUMBLOB,
             "MEDIUMTEXT": TokenType.MEDIUMTEXT,
+            "TINYTEXT": TokenType.TINYTEXT,
             "MEDIUMINT": TokenType.MEDIUMINT,
             "SEPARATOR": TokenType.SEPARATOR,
             "ENUM": TokenType.ENUM,
             "START": TokenType.BEGIN,
+            "YEAR": TokenType.SMALLINT,
             "_ARMSCII8": TokenType.INTRODUCER,
             "_ASCII": TokenType.INTRODUCER,
             "_BIG5": TokenType.INTRODUCER,
@@ -209,6 +212,7 @@ class MySQL(Dialect):
         STATEMENT_PARSERS = {
             **parser.Parser.STATEMENT_PARSERS,
             TokenType.SHOW: lambda self: self._parse_show(),
+            TokenType.LOCK: lambda self: self._parse_lock_tables(),
         }
 
         SHOW_PARSERS = {
@@ -390,6 +394,38 @@ class MySQL(Dialect):
                 collate = None
 
             return self.expression(exp.SetItem, this=charset, collate=collate, kind="NAMES")
+
+        """
+          LOCK TABLES Statement Definition
+          --------------------------------
+          LOCK TABLES
+              tbl_name [[AS] alias] lock_type
+              [, tbl_name [[AS] alias] lock_type] ...
+
+          lock_type: {
+              READ [LOCAL]
+              | [LOW_PRIORITY] WRITE
+          }
+        """
+
+        def _parse_lock_tables(self) -> exp.ExclusiveLock:
+            self._match(TokenType.LOCK)
+            lock = self._prev.text.upper()
+            self._match_texts(("TABLES"))
+            tables = self._prev.text.upper()
+            tbl_name = self._parse_id_var()
+            self._match_texts(("READ", "WRITE"))
+            lock_type = self._prev.text.upper()
+
+            return self.expression(
+                exp.ExclusiveLock,
+                this=lock,
+                kind=tables,
+                tbl_name=tbl_name,
+                lock_type=lock_type
+                # alias: False,
+                # expressions: False,
+            )
 
     class Generator(generator.Generator):
         LOCKING_READS_SUPPORTED = True

@@ -2449,6 +2449,17 @@ class Lock(Expression):
     arg_types = {"update": True, "expressions": False, "wait": False}
 
 
+class ExclusiveLock(Expression):
+    arg_types = {
+        "this": True,
+        "kind": False,
+        "tbl_name": True,
+        "alias": False,
+        "lock_type": False,
+        "expressions": False,
+    }
+
+
 class Select(Subqueryable):
     arg_types = {
         "with": False,
@@ -3321,6 +3332,7 @@ class DataType(Expression):
         INTERVAL = auto()
         JSON = auto()
         JSONB = auto()
+        TINYBLOB = auto()
         LONGBLOB = auto()
         LONGTEXT = auto()
         MAP = auto()
@@ -3346,6 +3358,7 @@ class DataType(Expression):
         TIMESTAMPTZ = auto()
         TIMESTAMPLTZ = auto()
         TINYINT = auto()
+        TINYTEXT = auto()
         UBIGINT = auto()
         UINT = auto()
         USMALLINT = auto()
@@ -3361,13 +3374,7 @@ class DataType(Expression):
         VARIANT = auto()
         XML = auto()
 
-    TEXT_TYPES = {
-        Type.CHAR,
-        Type.NCHAR,
-        Type.VARCHAR,
-        Type.NVARCHAR,
-        Type.TEXT,
-    }
+    TEXT_TYPES = {Type.CHAR, Type.NCHAR, Type.VARCHAR, Type.NVARCHAR, Type.TEXT, Type.TINYTEXT}
 
     INTEGER_TYPES = {
         Type.INT,

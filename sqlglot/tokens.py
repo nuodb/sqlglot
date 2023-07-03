@@ -99,8 +99,10 @@ class TokenType(AutoName):
     VARCHAR = auto()
     NVARCHAR = auto()
     TEXT = auto()
+    TINYTEXT = auto()
     MEDIUMTEXT = auto()
     LONGTEXT = auto()
+    TINYBLOB = auto()
     MEDIUMBLOB = auto()
     LONGBLOB = auto()
     BINARY = auto()
@@ -149,6 +151,7 @@ class TokenType(AutoName):
     ENUM = auto()
     OCTETS = auto()
     UNKNOWN = auto()
+    YEAR = auto()
 
     # keywords
     ALIAS = auto()
@@ -207,6 +210,7 @@ class TokenType(AutoName):
     END_WHILE = auto()
     ESCAPE = auto()
     EXCEPT = auto()
+    EXCLUSIVE = auto()
     EXECUTE = auto()
     EXISTS = auto()
     FALSE = auto()

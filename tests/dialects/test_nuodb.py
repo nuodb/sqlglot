@@ -26,9 +26,7 @@ class TestNuoDB(Validator):
             write={"nuodb": "ALTER TABLE employees ADD COLUMN hire_date DATE"},
         )
 
-        # ? CONSIDER MOVING TO MYSQL TESTS
-        self.validate_all(
-            "CREATE TABLE `datatypes1` (`c6` mediumint(9) NOT NULL DEFAULT '0')",
-            read="mysql",
-            write={"nuodb": "CREATE TABLE `datatypes1` (`c6` INTEGER(9) NOT NULL DEFAULT '0')"},
-        )
+    def test_lock_table(self):
+        self.validate_identity("LOCK TABLE `datatypes1` EXCLUSIVE", read="nuodb")
+
+    # def test_types(self):
