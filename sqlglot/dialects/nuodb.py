@@ -76,10 +76,12 @@ class NuoDB(Dialect):
         # ? COMMANDS?
 
     class Generator(generator.Generator):
-        TRANSFORMS = {exp.Array: lambda self, e: f"[{self.expressions(e)}]"}
+        # TRANSFORMS = {exp.Array: lambda self, e: f"[{self.expressions(e)}]"}
+        TRANSFORMS = {**generator.Generator.TRANSFORMS}
 
         TYPE_MAPPING = generator.Generator.TYPE_MAPPING.copy()
 
+        TYPE_MAPPING = {**generator.Generator.TYPE_MAPPING, exp.DataType.Type.MEDIUMINT: "NUMBER"}
         # ? Should all of these datatypes that NuoDB doesn't support be popped?
         # ? Seems like updating the TYPE_MAPPING such as the following is a good approach
         """

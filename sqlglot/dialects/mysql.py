@@ -129,6 +129,7 @@ class MySQL(Dialect):
             "LONGTEXT": TokenType.LONGTEXT,
             "MEDIUMBLOB": TokenType.MEDIUMBLOB,
             "MEDIUMTEXT": TokenType.MEDIUMTEXT,
+            "MEDIUMINT": TokenType.MEDIUMINT,
             "SEPARATOR": TokenType.SEPARATOR,
             "ENUM": TokenType.ENUM,
             "START": TokenType.BEGIN,

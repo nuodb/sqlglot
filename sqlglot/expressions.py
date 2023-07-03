@@ -3293,6 +3293,7 @@ class DataType(Expression):
         DATETIME = auto()
         DATETIME64 = auto()
         ENUM = auto()
+        MEDIUMINT = auto()
         INT4RANGE = auto()
         INT4MULTIRANGE = auto()
         INT8RANGE = auto()

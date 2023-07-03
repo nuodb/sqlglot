@@ -1,5 +1,4 @@
 .PHONY: install install-dev install-pre-commit test style check docs docs-serve
-# PYTHON=/usr/lib64/python3.8
 
 
 install:

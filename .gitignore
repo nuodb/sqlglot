@@ -140,3 +140,8 @@ spark_warehouse
 
 # Version file
 sqlglot/_version.py
+
+# NuoDB
+simple_tests.py
+mysql_file_test.py
+mysql.sql

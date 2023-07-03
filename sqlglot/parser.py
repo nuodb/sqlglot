@@ -122,6 +122,7 @@ class Parser(metaclass=_Parser):
         TokenType.USMALLINT,
         TokenType.INT,
         TokenType.UINT,
+        TokenType.MEDIUMINT,
         TokenType.BIGINT,
         TokenType.UBIGINT,
         TokenType.INT128,
