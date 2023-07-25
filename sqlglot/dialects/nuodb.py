@@ -1,8 +1,34 @@
 from __future__ import annotations
 
-from sqlglot import exp, generator, parser, tokens
-from sqlglot.dialects.dialect import Dialect
+from sqlglot import exp, generator, parser, tokens, transforms
+from sqlglot.dialects.dialect import Dialect, no_properties_sql
 from sqlglot.tokens import Tokenizer, TokenType
+
+def _auto_increment_to_generated_by_default(expression: exp.Expression) -> exp.Expression:
+    auto = expression.find(exp.AutoIncrementColumnConstraint)
+    if auto:
+        expression = expression.copy()
+        expression.args["constraints"].remove(auto.parent)
+        kind = expression.args["kind"]
+        if auto is not None:
+            expression.append("constraints", exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=False)))
+
+    return expression
+
+def _remove_collate(expression: exp.Expression) -> exp.Expression:
+    column_constraint = expression.find(exp.ColumnConstraint)
+    if column_constraint:
+        expression = expression.copy()
+        collateProp = column_constraint.find(exp.CollateColumnConstraint)
+        charsetProp = column_constraint.find(exp.CharacterSetColumnConstraint)
+        if collateProp:
+            expression.args["kind"].replace(None)
+        if charsetProp:
+            # print(expression.args["kind"])
+            expression.args["kind"].replace(None)
+
+    return expression
+
 
 
 class NuoDB(Dialect):
@@ -16,12 +42,13 @@ class NuoDB(Dialect):
             "N'",  # unicodequote
             # ?
         ]
-        COMMENTS = ["--", "//", ("/*", "*/")]
+        COMMENTS = ["--", "//", ("/*", "*/"), ("/* !", "*/;")]
         IDENTIFIERS = ["`", '"']  # ?
         STRING_ESCAPES = ["\\"]
 
         KEYWORDS = {
             **Tokenizer.KEYWORDS,
+            "DATABASE" : TokenType.DATABASE,
             "INT64": TokenType.BIGINT,
             "FLOAT64": TokenType.DOUBLE,
             "BITS": TokenType.BIT,  # ? Confirm "BIT" is the same as "BITS"
@@ -72,6 +99,7 @@ class NuoDB(Dialect):
             "_RECORD_PARTITIONID": TokenType._RECORD_PARTITIONID,
             "_RECORD_SEQUENCE": TokenType._RECORD_SEQUENCE,
             "_RECORD_TRANSACTION": TokenType._RECORD_TRANSACTION,
+            "CREATE" : TokenType.CREATE,
         }
 
     class Parser(parser.Parser):
@@ -96,12 +124,17 @@ class NuoDB(Dialect):
             )
 
     class Generator(generator.Generator):
-        TRANSFORMS = {**generator.Generator.TRANSFORMS}
+        TRANSFORMS = {**generator.Generator.TRANSFORMS,
+                      exp.ColumnDef: transforms.preprocess([_auto_increment_to_generated_by_default]),
+                       exp.Create: transforms.preprocess([transforms.replace_db_to_schema]),
+                       exp.ColumnConstraint : transforms.preprocess([_remove_collate]),
+                       exp.Properties: no_properties_sql,
+                      }
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
             exp.DataType.Type.MEDIUMINT: "NUMBER",  # ? Confirm NUMBER is most appropriate, and not
             exp.DataType.Type.TINYBLOB: "BLOB",  # ? Confirm NUMBER is most appropriate, and not
-            exp.DataType.Type.TINYTEXT: "VARCHAR(255)"
+            exp.DataType.Type.TINYTEXT: "VARCHAR(255)",
             # ? Revise below and add
             # exp.DataType.Type.TINYINT: "INT64",
             # exp.DataType.Type.SMALLINT: "INT64",
@@ -112,6 +145,15 @@ class NuoDB(Dialect):
             # exp.DataType.Type.DOUBLE: "FLOAT64",
             # exp.DataType.Type.BOOLEAN: "BOOL",
             # exp.DataType.Type.TEXT: "STRING",
+        }
+
+
+        PROPERTIES_LOCATION = {
+            **generator.Generator.PROPERTIES_LOCATION,
+            exp.EngineProperty: exp.Properties.Location.UNSUPPORTED,
+            exp.CharacterSetProperty: exp.Properties.Location.UNSUPPORTED,
+            exp.CollateProperty: exp.Properties.Location.UNSUPPORTED,
+            exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
         }
 
         def exclusivelock_sql(self, expression: exp.ExclusiveLock) -> str:
