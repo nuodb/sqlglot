@@ -2,29 +2,49 @@ from __future__ import annotations
 
 from sqlglot import exp, generator, parser, tokens, transforms
 from sqlglot.dialects.dialect import Dialect, no_properties_sql
-from sqlglot.tokens import Tokenizer, TokenType
+from sqlglot.tokens import Tokenizer, TokenType, Token
+
+
 
 def _auto_increment_to_generated_by_default(expression: exp.Expression) -> exp.Expression:
+
     auto = expression.find(exp.AutoIncrementColumnConstraint)
     if auto:
         expression = expression.copy()
         expression.args["constraints"].remove(auto.parent)
-        kind = expression.args["kind"]
         if auto is not None:
             expression.append("constraints", exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=False)))
 
     return expression
 
+
+def replace_db_to_schema( expression: exp.Expression) ->exp.Expression:
+    if (
+        isinstance(expression, (exp.Create))
+        and expression.args["kind"] == "DATABASE"
+    ):
+        expression = expression.copy()
+        kind = expression.args["kind"]
+        expression.args["kind"] = "SCHEMA"
+    return expression
+
+def _parse_unique(self: generator.Generator, expression : exp.Expression) ->str:
+    unique = expression.find_all(exp.UniqueColumnConstraint)
+    if unique:
+        this = expression.args["this"]
+        return f"UNIQUE KEY {this}"
+    else:
+        return expression
+
+
 def _remove_collate(expression: exp.Expression) -> exp.Expression:
+
     column_constraint = expression.find(exp.ColumnConstraint)
     if column_constraint:
         expression = expression.copy()
         collateProp = column_constraint.find(exp.CollateColumnConstraint)
         charsetProp = column_constraint.find(exp.CharacterSetColumnConstraint)
-        if collateProp:
-            expression.args["kind"].replace(None)
-        if charsetProp:
-            # print(expression.args["kind"])
+        if collateProp or charsetProp:
             expression.args["kind"].replace(None)
 
     return expression
@@ -48,7 +68,6 @@ class NuoDB(Dialect):
 
         KEYWORDS = {
             **Tokenizer.KEYWORDS,
-            "DATABASE" : TokenType.DATABASE,
             "INT64": TokenType.BIGINT,
             "FLOAT64": TokenType.DOUBLE,
             "BITS": TokenType.BIT,  # ? Confirm "BIT" is the same as "BITS"
@@ -99,16 +118,23 @@ class NuoDB(Dialect):
             "_RECORD_PARTITIONID": TokenType._RECORD_PARTITIONID,
             "_RECORD_SEQUENCE": TokenType._RECORD_SEQUENCE,
             "_RECORD_TRANSACTION": TokenType._RECORD_TRANSACTION,
-            "CREATE" : TokenType.CREATE,
+            "_UTF8": TokenType.INTRODUCER,
+            "_UTF16": TokenType.INTRODUCER,
+            "_UTF16LE": TokenType.INTRODUCER,
+            "_UTF32": TokenType.INTRODUCER,
+            "_UTF8MB3": TokenType.INTRODUCER,
+            "_UTF8MB4": TokenType.INTRODUCER,
+
         }
 
     class Parser(parser.Parser):
         STATEMENT_PARSERS = {
             **parser.Parser.STATEMENT_PARSERS,
             TokenType.LOCK: lambda self: self._parse_lock_table(),
+            TokenType.INSERT: lambda self: self._parse_insert(),
         }
 
-        # LOCK {TABLE} name [ EXCLUSIVE ];
+
         def _parse_lock_table(self) -> exp.ExclusiveLock:
             self._match(TokenType.LOCK)
             lock = self._prev.text.upper()
@@ -125,11 +151,12 @@ class NuoDB(Dialect):
 
     class Generator(generator.Generator):
         TRANSFORMS = {**generator.Generator.TRANSFORMS,
-                      exp.ColumnDef: transforms.preprocess([_auto_increment_to_generated_by_default]),
-                       exp.Create: transforms.preprocess([transforms.replace_db_to_schema]),
-                       exp.ColumnConstraint : transforms.preprocess([_remove_collate]),
-                       exp.Properties: no_properties_sql,
-                      }
+                    exp.ColumnDef: transforms.preprocess([_auto_increment_to_generated_by_default]),
+                    exp.Create: transforms.preprocess([replace_db_to_schema]),
+                    exp.ColumnConstraint : transforms.preprocess([_remove_collate]),
+                    exp.Properties: no_properties_sql,
+                    exp.UniqueColumnConstraint: _parse_unique,
+                    }
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
             exp.DataType.Type.MEDIUMINT: "NUMBER",  # ? Confirm NUMBER is most appropriate, and not

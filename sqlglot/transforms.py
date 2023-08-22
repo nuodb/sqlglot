@@ -41,17 +41,6 @@ def unalias_group(expression: exp.Expression) -> exp.Expression:
 
     return expression
 
-def replace_db_to_schema( expression: exp.Expression) ->exp.Expression:
-    if (
-        isinstance(expression, (exp.Create))
-        and expression.args["kind"] == "DATABASE"
-        and expression is not None
-    ):
-        expression = expression.copy()
-        kind = expression.args["kind"]
-        expression.args["kind"] = "SCHEMA"
-        # print("updated exp --->", expression)
-    return expression
 
 
 def eliminate_distinct_on(expression: exp.Expression) -> exp.Expression:
