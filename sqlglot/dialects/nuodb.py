@@ -24,7 +24,6 @@ def replace_db_to_schema( expression: exp.Expression) ->exp.Expression:
         and expression.args["kind"] == "DATABASE"
     ):
         expression = expression.copy()
-        kind = expression.args["kind"]
         expression.args["kind"] = "SCHEMA"
     return expression
 
@@ -48,8 +47,6 @@ def _remove_collate(expression: exp.Expression) -> exp.Expression:
             expression.args["kind"].replace(None)
 
     return expression
-
-
 
 class NuoDB(Dialect):
     # * Refer to http://nuocrucible/browse/NuoDB/Omega/Parser/SQL.l?r=5926eff6ff3e077c09c390c7acc4649c81b1d27b&r=daafc63d9399e66689d0990a893fbddd115df89f&r=6ef1d2d9e253f74515bf89625434b605be6486ea
