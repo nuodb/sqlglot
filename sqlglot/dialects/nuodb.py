@@ -5,12 +5,12 @@ from sqlglot.dialects.dialect import Dialect, no_properties_sql
 from sqlglot.tokens import Tokenizer, TokenType, Token
 
 
-def _parse_foreign_key_index(self: generator.Generator,expression: exp.Expression) -> exp.ForeignKey:
-
+def _parse_foreign_key_index(self: generator.Generator,expression: exp.Expression) -> str:
     foreign_key_expression = expression.find_all(exp.ForeignKey)
+    index_foreign_key_sql = ""
     if foreign_key_expression:
         for fk in foreign_key_expression:
-            foreign_key_name = expression.args.get("this")
+            foreign_key_name = expression.args["this"]
             index_name = f"{foreign_key_name}_FK_index" if foreign_key_name else None
             if not index_name:
                 continue
@@ -21,8 +21,8 @@ def _parse_foreign_key_index(self: generator.Generator,expression: exp.Expressio
             column_name = fk.args["expressions"][0]
             index_foreign_key_sql = f"CREATE INDEX {index_name} ON {table_name} ({column_name})"
             fk.set("index", index_foreign_key_sql)
-
-    return f"{expression}"
+            # return f"{expression} {index_foreign_key_sql}"
+    return f"{expression} {index_foreign_key_sql}"
 
 def _auto_increment_to_generated_by_default(expression: exp.Expression) -> exp.Expression:
 
@@ -174,7 +174,7 @@ class NuoDB(Dialect):
                     exp.ColumnConstraint : transforms.preprocess([_remove_collate]),
                     exp.Properties: no_properties_sql,
                     exp.UniqueColumnConstraint: _parse_unique,
-                    exp.ForeignKey: _parse_foreign_key_index,
+                    exp.Constraint: _parse_foreign_key_index,
                     }
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
