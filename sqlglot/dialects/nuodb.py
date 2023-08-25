@@ -5,6 +5,24 @@ from sqlglot.dialects.dialect import Dialect, no_properties_sql
 from sqlglot.tokens import Tokenizer, TokenType, Token
 
 
+def _parse_foreign_key_index(self: generator.Generator,expression: exp.Expression) -> exp.ForeignKey:
+
+    foreign_key_expression = expression.find_all(exp.ForeignKey)
+    if foreign_key_expression:
+        for fk in foreign_key_expression:
+            foreign_key_name = expression.args.get("this")
+            index_name = f"{foreign_key_name}_FK_index" if foreign_key_name else None
+            if not index_name:
+                continue
+            reference = fk.args["reference"]
+            table_name = reference.args["this"] if reference else None
+            if not table_name:
+                continue
+            column_name = fk.args["expressions"][0]
+            index_foreign_key_sql = f"CREATE INDEX {index_name} ON {table_name} ({column_name})"
+            fk.set("index", index_foreign_key_sql)
+
+    return f"{expression}"
 
 def _auto_increment_to_generated_by_default(expression: exp.Expression) -> exp.Expression:
 
@@ -129,8 +147,11 @@ class NuoDB(Dialect):
             **parser.Parser.STATEMENT_PARSERS,
             TokenType.LOCK: lambda self: self._parse_lock_table(),
             TokenType.INSERT: lambda self: self._parse_insert(),
+            # TokenType.FOREIGN_KEY_INDEX: lambda self: self._parse_foreign_key_index(),
         }
 
+        # def _parse_foreign_key_index(self) -> exp.ForeignKeyIndex:
+        #     print("_parse_foreign_key_index in nuodb")
 
         def _parse_lock_table(self) -> exp.ExclusiveLock:
             self._match(TokenType.LOCK)
@@ -153,6 +174,7 @@ class NuoDB(Dialect):
                     exp.ColumnConstraint : transforms.preprocess([_remove_collate]),
                     exp.Properties: no_properties_sql,
                     exp.UniqueColumnConstraint: _parse_unique,
+                    exp.ForeignKey: _parse_foreign_key_index,
                     }
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
@@ -179,6 +201,17 @@ class NuoDB(Dialect):
             exp.CollateProperty: exp.Properties.Location.UNSUPPORTED,
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
         }
+
+        # def foreignkeyindex_sql(self, expression: exp.ForeignKeyIndex) -> str:
+        #     print("parsing foeign key")
+        #     expressions = self.expressions(expression, flat=True)
+        #     reference = self.sql(expression, "reference")
+        #     reference = f" {reference}" if reference else ""
+        #     delete = self.sql(expression, "delete")
+        #     delete = f" ON DELETE {delete}" if delete else ""
+        #     update = self.sql(expression, "update")
+        #     update = f" ON UPDATE {update}" if update else ""
+        #     return f"CREATE INDEX ()"
 
         def exclusivelock_sql(self, expression: exp.ExclusiveLock) -> str:
             kind = self.sql(expression, "kind")

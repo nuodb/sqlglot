@@ -1450,6 +1450,7 @@ class ForeignKey(Expression):
         "reference": False,
         "delete": False,
         "update": False,
+        "index": False,
     }
 
 
