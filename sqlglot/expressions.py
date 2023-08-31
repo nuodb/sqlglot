@@ -991,6 +991,7 @@ class Create(Expression):
         "no_schema_binding": False,
         "begin": False,
         "clone": False,
+        "foreign_key_index": False
     }
 
 
@@ -3089,6 +3090,7 @@ class Select(Subqueryable):
             kind="table",
             expression=instance,
             properties=properties_expression,
+            foreign_key_index=False
         )
 
     def lock(self, update: bool = True, copy: bool = True) -> Select:

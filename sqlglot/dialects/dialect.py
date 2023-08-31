@@ -284,7 +284,7 @@ class Dialect(metaclass=_Dialect):
         return self.parser(**opts).parse_into(expression_type, self.tokenize(sql), sql)
 
     def generate(self, expression: t.Optional[exp.Expression], **opts) -> str:
-        return self.generator(**opts).generate(expression)
+        return self.generator(**opts).generate(expression, **opts)
 
     def transpile(self, sql: str, **opts) -> t.List[str]:
         return [self.generate(expression, **opts) for expression in self.parse(sql)]

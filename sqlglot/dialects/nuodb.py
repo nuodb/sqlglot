@@ -1,28 +1,40 @@
 from __future__ import annotations
 
 from sqlglot import exp, generator, parser, tokens, transforms
-from sqlglot.dialects.dialect import Dialect, no_properties_sql
+from sqlglot.dialects.dialect import (Dialect, no_properties_sql,no_comment_column_constraint_sql)
 from sqlglot.tokens import Tokenizer, TokenType, Token
+
 
 
 def _parse_foreign_key_index(self: generator.Generator,expression: exp.Expression) -> str:
     foreign_key_expression = expression.find_all(exp.ForeignKey)
-    index_foreign_key_sql = ""
+    index_foreign_key_sql= ""
     if foreign_key_expression:
         for fk in foreign_key_expression:
-            foreign_key_name = expression.args["this"]
-            index_name = f"{foreign_key_name}_FK_index" if foreign_key_name else None
-            if not index_name:
-                continue
-            reference = fk.args["reference"]
-            table_name = reference.args["this"] if reference else None
-            if not table_name:
-                continue
+            tbl_name = expression.parent.args["this"]
+            print("tbl_name -->", tbl_name)
             column_name = fk.args["expressions"][0]
-            index_foreign_key_sql = f"CREATE INDEX {index_name} ON {table_name} ({column_name})"
-            fk.set("index", index_foreign_key_sql)
-            # return f"{expression} {index_foreign_key_sql}"
-    return f"{expression} {index_foreign_key_sql}"
+            print("column name -->", column_name)
+            index_name = f"{tbl_name}_{column_name}"
+            index_name = index_name.replace('\"', '')
+            index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
+            print("index_foreign_key_sql--->", index_foreign_key_sql)
+    #     for fk in foreign_key_expression:
+    #         print("expression-=-->", expression.parent.args["this"])
+    #         foreign_key_name = expression.args["this"]
+    #         index_name = f"{foreign_key_name}_FK_index" if foreign_key_name else None
+    #         index_name = index_name.replace('\"', '')
+    #         if not index_name:
+    #             continue
+    #         reference = fk.args["reference"]
+    #         table_name = reference.args["this"] if reference else None
+    #         if not table_name:
+    #             continue
+    #         column_name = fk.args["expressions"][0]
+    #         index_foreign_key_sql = f"CREATE INDEX {index_name} ON {table_name} ({column_name})"
+    #         fk.set("index", index_foreign_key_sql)
+    expression.parent.parent.set("foreign_key_index", index_foreign_key_sql)
+    return expression
 
 def _auto_increment_to_generated_by_default(expression: exp.Expression) -> exp.Expression:
 
@@ -147,12 +159,7 @@ class NuoDB(Dialect):
             **parser.Parser.STATEMENT_PARSERS,
             TokenType.LOCK: lambda self: self._parse_lock_table(),
             TokenType.INSERT: lambda self: self._parse_insert(),
-            # TokenType.FOREIGN_KEY_INDEX: lambda self: self._parse_foreign_key_index(),
         }
-
-        # def _parse_foreign_key_index(self) -> exp.ForeignKeyIndex:
-        #     print("_parse_foreign_key_index in nuodb")
-
         def _parse_lock_table(self) -> exp.ExclusiveLock:
             self._match(TokenType.LOCK)
             lock = self._prev.text.upper()
@@ -175,12 +182,14 @@ class NuoDB(Dialect):
                     exp.Properties: no_properties_sql,
                     exp.UniqueColumnConstraint: _parse_unique,
                     exp.Constraint: _parse_foreign_key_index,
+                    exp.CommentColumnConstraint: no_comment_column_constraint_sql,
                     }
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
             exp.DataType.Type.MEDIUMINT: "NUMBER",  # ? Confirm NUMBER is most appropriate, and not
             exp.DataType.Type.TINYBLOB: "BLOB",  # ? Confirm NUMBER is most appropriate, and not
             exp.DataType.Type.TINYTEXT: "VARCHAR(255)",
+            exp.DataType.Type.INT: "INTEGER",
             # ? Revise below and add
             # exp.DataType.Type.TINYINT: "INT64",
             # exp.DataType.Type.SMALLINT: "INT64",
