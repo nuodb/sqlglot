@@ -12,27 +12,11 @@ def _parse_foreign_key_index(self: generator.Generator,expression: exp.Expressio
     if foreign_key_expression:
         for fk in foreign_key_expression:
             tbl_name = expression.parent.args["this"]
-            print("tbl_name -->", tbl_name)
             column_name = fk.args["expressions"][0]
-            print("column name -->", column_name)
             index_name = f"{tbl_name}_{column_name}"
             index_name = index_name.replace('\"', '')
             index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
-            print("index_foreign_key_sql--->", index_foreign_key_sql)
-    #     for fk in foreign_key_expression:
-    #         print("expression-=-->", expression.parent.args["this"])
-    #         foreign_key_name = expression.args["this"]
-    #         index_name = f"{foreign_key_name}_FK_index" if foreign_key_name else None
-    #         index_name = index_name.replace('\"', '')
-    #         if not index_name:
-    #             continue
-    #         reference = fk.args["reference"]
-    #         table_name = reference.args["this"] if reference else None
-    #         if not table_name:
-    #             continue
-    #         column_name = fk.args["expressions"][0]
-    #         index_foreign_key_sql = f"CREATE INDEX {index_name} ON {table_name} ({column_name})"
-    #         fk.set("index", index_foreign_key_sql)
+
     expression.parent.parent.set("foreign_key_index", index_foreign_key_sql)
     return expression
 
@@ -210,17 +194,6 @@ class NuoDB(Dialect):
             exp.CollateProperty: exp.Properties.Location.UNSUPPORTED,
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
         }
-
-        # def foreignkeyindex_sql(self, expression: exp.ForeignKeyIndex) -> str:
-        #     print("parsing foeign key")
-        #     expressions = self.expressions(expression, flat=True)
-        #     reference = self.sql(expression, "reference")
-        #     reference = f" {reference}" if reference else ""
-        #     delete = self.sql(expression, "delete")
-        #     delete = f" ON DELETE {delete}" if delete else ""
-        #     update = self.sql(expression, "update")
-        #     update = f" ON UPDATE {update}" if update else ""
-        #     return f"CREATE INDEX ()"
 
         def exclusivelock_sql(self, expression: exp.ExclusiveLock) -> str:
             kind = self.sql(expression, "kind")
