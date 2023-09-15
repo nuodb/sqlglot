@@ -304,7 +304,7 @@ class Generator:
         "_escaped_quote_end",
         "_escaped_identifier_end",
         "_cache",
-    )
+        )
 
     def __init__(
         self,
@@ -319,6 +319,7 @@ class Generator:
         leading_comma: bool = False,
         max_text_width: int = 80,
         comments: bool = True,
+        fk_index: bool = False,
     ):
         import sqlglot
 
@@ -347,6 +348,7 @@ class Generator:
         self,
         expression: t.Optional[exp.Expression],
         cache: t.Optional[t.Dict[int, str]] = None,
+        **opts
     ) -> str:
         """
         Generates the SQL string corresponding to the given syntax tree.
@@ -359,6 +361,11 @@ class Generator:
         Returns:
             The SQL string corresponding to `expression`.
         """
+        fk_index = opts.get("fk_index")
+        # print("fk_index --->", fk_index)
+        # self.needed_foreign_key_index = None
+        if fk_index is not None:
+            self.needed_foreign_key_index = fk_index
         if cache is not None:
             self._cache = cache
 
@@ -378,6 +385,7 @@ class Generator:
         if self.pretty:
             sql = sql.replace(self.SENTINEL_LINE_BREAK, "\n")
         return sql
+
 
     def unsupported(self, message: str) -> None:
         if self.unsupported_level == ErrorLevel.IMMEDIATE:
@@ -721,7 +729,14 @@ class Generator:
         clone = f" {clone}" if clone else ""
 
         expression_sql = f"CREATE{modifiers} {kind}{exists_sql} {this}{properties_sql}{expression_sql}{postexpression_props_sql}{index_sql}{no_schema_binding}{clone}"
-        return self.prepend_ctes(expression, expression_sql)
+        create_table_exp = self.prepend_ctes(expression, expression_sql)
+        if self.needed_foreign_key_index:
+            if expression.args.get("foreign_key_index"):
+                foreign_exp = expression.args.get("foreign_key_index")
+                print("foreign_ecxp", foreign_exp)
+                create_table_exp += ";\n" + foreign_exp
+        return create_table_exp
+
 
     def clone_sql(self, expression: exp.Clone) -> str:
         this = self.sql(expression, "this")
