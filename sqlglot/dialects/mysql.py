@@ -180,6 +180,7 @@ class MySQL(Dialect):
             "_UTF8MB3": TokenType.INTRODUCER,
             "_UTF8MB4": TokenType.INTRODUCER,
             "@@": TokenType.SESSION_PARAMETER,
+            "KEY": TokenType.KEY,
         }
 
         COMMANDS = tokens.Tokenizer.COMMANDS - {TokenType.SHOW}
@@ -276,6 +277,11 @@ class MySQL(Dialect):
             "CHARACTER SET": lambda self: self._parse_set_item_charset("CHARACTER SET"),
             "CHARSET": lambda self: self._parse_set_item_charset("CHARACTER SET"),
             "NAMES": lambda self: self._parse_set_item_names(),
+        }
+
+        CONSTRAINT_PARSERS = {
+            **parser.Parser.CONSTRAINT_PARSERS,
+            "KEY": lambda self: self._parse_key_index(),
         }
 
         PROFILE_TYPES = {
@@ -407,6 +413,15 @@ class MySQL(Dialect):
               | [LOW_PRIORITY] WRITE
           }
         """
+        def _parse_key_index(self) ->exp.KeyColumnConstraintForIndex:
+            self._match(TokenType.KEY)
+            idx_name = self._parse_id_var()
+            col_name = self._parse_bitwise()
+            if self._match_texts("USING"):
+                opts = f"USING {self._parse_bitwise()}"
+            else:
+                opts = False
+            return self.expression(exp.KeyColumnConstraintForIndex, this=True, desc = True, keyname=idx_name, colname=col_name, options=opts)
 
         def _parse_lock_tables(self) -> exp.ExclusiveLock:
             self._match(TokenType.LOCK)
