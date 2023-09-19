@@ -704,7 +704,7 @@ class Parser(metaclass=_Parser):
         "RENAME": lambda self: self._parse_alter_table_rename(),
     }
 
-    SCHEMA_UNNAMED_CONSTRAINTS = {"CHECK", "FOREIGN KEY", "LIKE", "PRIMARY KEY", "UNIQUE"}
+    SCHEMA_UNNAMED_CONSTRAINTS = {"CHECK", "FOREIGN KEY", "LIKE", "PRIMARY KEY", "UNIQUE", "KEY"}
 
     NO_PAREN_FUNCTION_PARSERS = {
         TokenType.ANY: lambda self: self.expression(exp.Any, this=self._parse_bitwise()),

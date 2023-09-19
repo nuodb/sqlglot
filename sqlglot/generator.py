@@ -1967,8 +1967,11 @@ class Generator:
 
     def alias_sql(self, expression: exp.Alias) -> str:
         alias = self.sql(expression, "alias")
-        alias = f" AS {alias}" if alias else ""
-        return f"{self.sql(expression, 'this')}{alias}"
+        if not TokenType.KEY:
+            alias = f" AS {alias}" if alias else ""
+            return f"{self.sql(expression, 'this')}{alias}"
+        else:
+            return f"{self.sql(expression, 'this')} {alias}"
 
     def aliases_sql(self, expression: exp.Aliases) -> str:
         return f"{self.sql(expression, 'this')} AS ({self.expressions(expression, flat=True)})"

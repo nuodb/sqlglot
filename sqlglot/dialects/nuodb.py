@@ -177,6 +177,8 @@ class NuoDB(Dialect):
             exp.DataType.Type.TINYBLOB: "BLOB",  # ? Confirm NUMBER is most appropriate, and not
             exp.DataType.Type.TINYTEXT: "VARCHAR(255)",
             exp.DataType.Type.INT: "INTEGER",
+            exp.DataType.Type.JSON: "TEXT",
+            exp.DataType.Type.VARBINARY : "BLOB"
 
             # ? Revise below and add
             # exp.DataType.Type.TINYINT: "INT64",
@@ -207,6 +209,32 @@ class NuoDB(Dialect):
             lock_type = self.sql(expression, "lock_type")
             lock_type = f" EXCLUSIVE" if lock_type in ["WRITE", "READ"] else ""
             return f"LOCK{kind}{tbl_name}{lock_type}"
+
+        def keycolumnconstraintforindex_sql(self, expression: exp.KeyColumnConstraintForIndex) -> str:
+            exp = expression.args.get("expression")
+            desc = expression.args.get("desc")
+            key_name = expression.args.get("keyname")
+            col_name = expression.args.get("colname")
+            opts= expression.args.get("options")
+            if opts is False:
+                return f"KEY {key_name} {col_name}"
+            else:
+                return f"KEY {key_name} {col_name} {opts}"
+
+
+        def datatype_sql(self, expression: exp.DataType) -> str:
+            if expression.is_type("bit"):
+                expression = expression.copy()
+                expression.set("this", exp.DataType.Type.BOOLEAN)
+                precision = expression.args.get("expressions")
+                expression.args["expressions"] = None
+            if expression.is_type("tinyint"):
+                expression = expression.copy()
+                expression.set("this", exp.DataType.Type.INT)
+                precision = expression.args.get("expressions")
+                expression.args["expressions"] = None
+
+            return super().datatype_sql(expression)
 
         # ? Should all of these datatypes that NuoDB doesn't support be popped?
         # TYPE_MAPPING.pop(exp.DataType.Type.BIGDECIMAL)

@@ -1296,6 +1296,14 @@ class UppercaseColumnConstraint(ColumnConstraintKind):
 class PathColumnConstraint(ColumnConstraintKind):
     pass
 
+class KeyColumnConstraintForIndex(ColumnConstraintKind):
+    arg_types = {"this": False,
+                 "expression":False,
+                 "desc": False,
+                 "keyname": False,
+                 "colname":False,
+                 "options": False}
+
 
 class Constraint(Expression):
     arg_types = {"this": True, "expressions": True}
