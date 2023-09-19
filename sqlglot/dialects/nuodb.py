@@ -6,6 +6,7 @@ from sqlglot.tokens import Tokenizer, TokenType, Token
 
 
 
+
 def _parse_foreign_key_index(self: generator.Generator,expression: exp.Expression) -> str:
     if isinstance(expression.parent.parent, exp.Create):
         foreign_key_expression = expression.find_all(exp.ForeignKey)
@@ -156,6 +157,7 @@ class NuoDB(Dialect):
             TokenType.LOCK: lambda self: self._parse_lock_table(),
             TokenType.INSERT: lambda self: self._parse_insert(),
         }
+
         def _parse_lock_table(self) -> exp.ExclusiveLock:
             self._match(TokenType.LOCK)
             lock = self._prev.text.upper()
@@ -180,6 +182,7 @@ class NuoDB(Dialect):
                     exp.Constraint: _parse_foreign_key_index,
                     exp.CommentColumnConstraint: no_comment_column_constraint_sql,
                     exp.AddConstraint: _parse_foreign_key_index
+
                     }
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
@@ -189,6 +192,7 @@ class NuoDB(Dialect):
             exp.DataType.Type.INT: "INTEGER",
             exp.DataType.Type.JSON: "TEXT",
             exp.DataType.Type.VARBINARY : "BLOB"
+
             # ? Revise below and add
             # exp.DataType.Type.TINYINT: "INT64",
             # exp.DataType.Type.SMALLINT: "INT64",

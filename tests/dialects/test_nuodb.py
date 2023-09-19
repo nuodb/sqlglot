@@ -44,3 +44,4 @@ class TestNuoDB(Validator):
     def test_parse_foreign_key_index(self):
         self.validate_all("CREATE INDEX titles_emp_no ON titles (emp_no)",
         write={"nuodb": "CREATE INDEX titles_emp_no ON titles (emp_no)"})
+
