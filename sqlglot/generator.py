@@ -11,7 +11,7 @@ from sqlglot.tokens import TokenType
 
 logger = logging.getLogger("sqlglot")
 
-
+global need_fk_for_index
 class Generator:
     """
     Generator converts a given syntax tree to the corresponding SQL string.
@@ -361,11 +361,10 @@ class Generator:
         Returns:
             The SQL string corresponding to `expression`.
         """
+        global need_fk_for_index
         fk_index = opts.get("fk_index")
-        # print("fk_index --->", fk_index)
-        # self.needed_foreign_key_index = None
         if fk_index is not None:
-            self.needed_foreign_key_index = fk_index
+            need_fk_for_index = fk_index
         if cache is not None:
             self._cache = cache
 
@@ -730,10 +729,9 @@ class Generator:
 
         expression_sql = f"CREATE{modifiers} {kind}{exists_sql} {this}{properties_sql}{expression_sql}{postexpression_props_sql}{index_sql}{no_schema_binding}{clone}"
         create_table_exp = self.prepend_ctes(expression, expression_sql)
-        if self.needed_foreign_key_index:
+        if need_fk_for_index:
             if expression.args.get("foreign_key_index"):
                 foreign_exp = expression.args.get("foreign_key_index")
-                print("foreign_ecxp", foreign_exp)
                 create_table_exp += ";\n" + foreign_exp
         return create_table_exp
 
@@ -2116,7 +2114,13 @@ class Generator:
             actions = self.expressions(expression, key="actions")
 
         exists = " IF EXISTS" if expression.args.get("exists") else ""
-        return f"ALTER TABLE{exists} {self.sql(expression, 'this')} {actions}"
+        alterTable_sql = f"ALTER TABLE{exists} {self.sql(expression, 'this')} {actions}"
+
+        if need_fk_for_index:
+            if expression.args.get("foreign_key_index"):
+                foreign_index_exp = expression.args.get("foreign_key_index")
+                alterTable_sql +=";\n" + foreign_index_exp
+        return alterTable_sql
 
     def droppartition_sql(self, expression: exp.DropPartition) -> str:
         expressions = self.expressions(expression)
