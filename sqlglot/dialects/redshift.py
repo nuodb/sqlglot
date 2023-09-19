@@ -3,19 +3,34 @@ from __future__ import annotations
 import typing as t
 
 from sqlglot import exp, transforms
-from sqlglot.dialects.dialect import concat_to_dpipe_sql, rename_func
+from sqlglot.dialects.dialect import (
+    concat_to_dpipe_sql,
+    concat_ws_to_dpipe_sql,
+    rename_func,
+    ts_or_ds_to_date_sql,
+)
 from sqlglot.dialects.postgres import Postgres
 from sqlglot.helper import seq_get
 from sqlglot.tokens import TokenType
 
 
-def _json_sql(self: Postgres.Generator, expression: exp.JSONExtract | exp.JSONExtractScalar) -> str:
+def _json_sql(self: Redshift.Generator, expression: exp.JSONExtract | exp.JSONExtractScalar) -> str:
     return f'{self.sql(expression, "this")}."{expression.expression.name}"'
+
+
+def _parse_date_add(args: t.List) -> exp.DateAdd:
+    return exp.DateAdd(
+        this=exp.TsOrDsToDate(this=seq_get(args, 2)),
+        expression=seq_get(args, 1),
+        unit=seq_get(args, 0),
+    )
 
 
 class Redshift(Postgres):
     # https://docs.aws.amazon.com/redshift/latest/dg/r_names.html
     RESOLVES_IDENTIFIERS_AS_UPPERCASE = None
+
+    SUPPORTS_USER_DEFINED_TYPES = False
 
     TIME_FORMAT = "'YYYY-MM-DD HH:MI:SS'"
     TIME_MAPPING = {
@@ -27,26 +42,27 @@ class Redshift(Postgres):
     class Parser(Postgres.Parser):
         FUNCTIONS = {
             **Postgres.Parser.FUNCTIONS,
-            "DATEADD": lambda args: exp.DateAdd(
-                this=exp.TsOrDsToDate(this=seq_get(args, 2)),
+            "ADD_MONTHS": lambda args: exp.DateAdd(
+                this=exp.TsOrDsToDate(this=seq_get(args, 0)),
                 expression=seq_get(args, 1),
-                unit=seq_get(args, 0),
+                unit=exp.var("month"),
             ),
+            "DATEADD": _parse_date_add,
+            "DATE_ADD": _parse_date_add,
             "DATEDIFF": lambda args: exp.DateDiff(
                 this=exp.TsOrDsToDate(this=seq_get(args, 2)),
                 expression=exp.TsOrDsToDate(this=seq_get(args, 1)),
                 unit=seq_get(args, 0),
             ),
-            "NVL": exp.Coalesce.from_arg_list,
             "STRTOL": exp.FromBase.from_arg_list,
         }
 
-        CONVERT_TYPE_FIRST = True
-
         def _parse_types(
-            self, check_func: bool = False, schema: bool = False
+            self, check_func: bool = False, schema: bool = False, allow_identifiers: bool = True
         ) -> t.Optional[exp.Expression]:
-            this = super()._parse_types(check_func=check_func, schema=schema)
+            this = super()._parse_types(
+                check_func=check_func, schema=schema, allow_identifiers=allow_identifiers
+            )
 
             if (
                 isinstance(this, exp.DataType)
@@ -58,6 +74,12 @@ class Redshift(Postgres):
 
             return this
 
+        def _parse_convert(self, strict: bool) -> t.Optional[exp.Expression]:
+            to = self._parse_types()
+            self._match(TokenType.COMMA)
+            this = self._parse_bitwise()
+            return self.expression(exp.TryCast, this=this, to=to)
+
     class Tokenizer(Postgres.Tokenizer):
         BIT_STRINGS = []
         HEX_STRINGS = []
@@ -68,8 +90,6 @@ class Redshift(Postgres):
             "HLLSKETCH": TokenType.HLLSKETCH,
             "SUPER": TokenType.SUPER,
             "SYSDATE": TokenType.CURRENT_TIMESTAMP,
-            "TIME": TokenType.TIMESTAMP,
-            "TIMETZ": TokenType.TIMESTAMPTZ,
             "TOP": TokenType.TOP,
             "UNLOAD": TokenType.COMMAND,
             "VARBYTE": TokenType.VARBINARY,
@@ -82,12 +102,18 @@ class Redshift(Postgres):
     class Generator(Postgres.Generator):
         LOCKING_READS_SUPPORTED = False
         RENAME_TABLE_WITH_DB = False
+        QUERY_HINTS = False
+        VALUES_AS_TABLE = False
+        TZ_TO_WITH_TIME_ZONE = True
+        NVL2_SUPPORTED = True
 
         TYPE_MAPPING = {
             **Postgres.Generator.TYPE_MAPPING,
             exp.DataType.Type.BINARY: "VARBYTE",
-            exp.DataType.Type.VARBINARY: "VARBYTE",
             exp.DataType.Type.INT: "INTEGER",
+            exp.DataType.Type.TIMETZ: "TIME",
+            exp.DataType.Type.TIMESTAMPTZ: "TIMESTAMP",
+            exp.DataType.Type.VARBINARY: "VARBYTE",
         }
 
         PROPERTIES_LOCATION = {
@@ -98,6 +124,7 @@ class Redshift(Postgres):
         TRANSFORMS = {
             **Postgres.Generator.TRANSFORMS,
             exp.Concat: concat_to_dpipe_sql,
+            exp.ConcatWs: concat_ws_to_dpipe_sql,
             exp.CurrentTimestamp: lambda self, e: "SYSDATE",
             exp.DateAdd: lambda self, e: self.func(
                 "DATEADD", exp.var(e.text("unit") or "day"), e.expression, e.this
@@ -111,9 +138,11 @@ class Redshift(Postgres):
             exp.JSONExtract: _json_sql,
             exp.JSONExtractScalar: _json_sql,
             exp.SafeConcat: concat_to_dpipe_sql,
-            exp.Select: transforms.preprocess([transforms.eliminate_distinct_on]),
+            exp.Select: transforms.preprocess(
+                [transforms.eliminate_distinct_on, transforms.eliminate_semi_and_anti_joins]
+            ),
             exp.SortKeyProperty: lambda self, e: f"{'COMPOUND ' if e.args['compound'] else ''}SORTKEY({self.format_args(*e.this)})",
-            exp.TsOrDsToDate: lambda self, e: self.sql(e.this),
+            exp.TsOrDsToDate: ts_or_ds_to_date_sql("redshift"),
         }
 
         # Postgres maps exp.Pivot to no_pivot_sql, but Redshift support pivots
@@ -122,41 +151,10 @@ class Redshift(Postgres):
         # Redshift uses the POW | POWER (expr1, expr2) syntax instead of expr1 ^ expr2 (postgres)
         TRANSFORMS.pop(exp.Pow)
 
+        # Redshift supports ANY_VALUE(..)
+        TRANSFORMS.pop(exp.AnyValue)
+
         RESERVED_KEYWORDS = {*Postgres.Generator.RESERVED_KEYWORDS, "snapshot", "type"}
-
-        def values_sql(self, expression: exp.Values) -> str:
-            """
-            Converts `VALUES...` expression into a series of unions.
-
-            Note: If you have a lot of unions then this will result in a large number of recursive statements to
-            evaluate the expression. You may need to increase `sys.setrecursionlimit` to run and it can also be
-            very slow.
-            """
-
-            # The VALUES clause is still valid in an `INSERT INTO ..` statement, for example
-            if not expression.find_ancestor(exp.From, exp.Join):
-                return super().values_sql(expression)
-
-            column_names = expression.alias and expression.args["alias"].columns
-
-            selects = []
-            rows = [tuple_exp.expressions for tuple_exp in expression.expressions]
-
-            for i, row in enumerate(rows):
-                if i == 0 and column_names:
-                    row = [
-                        exp.alias_(value, column_name)
-                        for value, column_name in zip(row, column_names)
-                    ]
-
-                selects.append(exp.Select(expressions=row))
-
-            subquery_expression: exp.Select | exp.Union = selects[0]
-            if len(selects) > 1:
-                for select in selects[1:]:
-                    subquery_expression = exp.union(subquery_expression, select, distinct=False)
-
-            return self.subquery_sql(subquery_expression.subquery(expression.alias))
 
         def with_properties(self, properties: exp.Properties) -> str:
             """Redshift doesn't have `WITH` as part of their with_properties so we remove it"""

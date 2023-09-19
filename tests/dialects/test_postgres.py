@@ -9,6 +9,11 @@ class TestPostgres(Validator):
     dialect = "postgres"
 
     def test_ddl(self):
+        self.validate_identity(
+            "CREATE TABLE test (x TIMESTAMP WITHOUT TIME ZONE[][])",
+            "CREATE TABLE test (x TIMESTAMP[][])",
+        )
+        self.validate_identity("CREATE TABLE test (elems JSONB[])")
         self.validate_identity("CREATE TABLE public.y (x TSTZRANGE NOT NULL)")
         self.validate_identity("CREATE TABLE test (foo HSTORE)")
         self.validate_identity("CREATE TABLE test (foo JSONB)")
@@ -97,7 +102,7 @@ class TestPostgres(Validator):
             write={
                 "hive": "SELECT EXPLODE(c) FROM t",
                 "postgres": "SELECT UNNEST(c) FROM t",
-                "presto": "SELECT col FROM t CROSS JOIN UNNEST(c) AS _u(col)",
+                "presto": "SELECT IF(pos = pos_2, col) AS col FROM t, UNNEST(SEQUENCE(1, GREATEST(CARDINALITY(c)))) AS _u(pos) CROSS JOIN UNNEST(c) WITH ORDINALITY AS _u_2(col, pos_2) WHERE pos = pos_2 OR (pos > CARDINALITY(c) AND pos_2 = CARDINALITY(c))",
             },
         )
         self.validate_all(
@@ -105,12 +110,12 @@ class TestPostgres(Validator):
             write={
                 "hive": "SELECT EXPLODE(ARRAY(1))",
                 "postgres": "SELECT UNNEST(ARRAY[1])",
-                "presto": "SELECT col FROM UNNEST(ARRAY[1]) AS _u(col)",
+                "presto": "SELECT IF(pos = pos_2, col) AS col FROM UNNEST(SEQUENCE(1, GREATEST(CARDINALITY(ARRAY[1])))) AS _u(pos) CROSS JOIN UNNEST(ARRAY[1]) WITH ORDINALITY AS _u_2(col, pos_2) WHERE pos = pos_2 OR (pos > CARDINALITY(ARRAY[1]) AND pos_2 = CARDINALITY(ARRAY[1]))",
             },
         )
 
     @mock.patch("sqlglot.helper.logger")
-    def test_array_offset(self, mock_logger):
+    def test_array_offset(self, logger):
         self.validate_all(
             "SELECT col[1]",
             write={
@@ -121,6 +126,21 @@ class TestPostgres(Validator):
         )
 
     def test_postgres(self):
+        expr = parse_one("SELECT * FROM r CROSS JOIN LATERAL UNNEST(ARRAY[1]) AS s(location)")
+        unnest = expr.args["joins"][0].this.this
+        unnest.assert_is(exp.Unnest)
+
+        alter_table_only = """ALTER TABLE ONLY "Album" ADD CONSTRAINT "FK_AlbumArtistId" FOREIGN KEY ("ArtistId") REFERENCES "Artist" ("ArtistId") ON DELETE NO ACTION ON UPDATE NO ACTION"""
+        expr = parse_one(alter_table_only)
+
+        # Checks that user-defined types are parsed into DataType instead of Identifier
+        parse_one("CREATE TABLE t (a udt)").this.expressions[0].args["kind"].assert_is(exp.DataType)
+
+        self.assertIsInstance(expr, exp.AlterTable)
+        self.assertEqual(expr.sql(dialect="postgres"), alter_table_only)
+
+        self.validate_identity("x @@ y")
+        self.validate_identity("CAST(x AS MONEY)")
         self.validate_identity("CAST(x AS INT4RANGE)")
         self.validate_identity("CAST(x AS INT4MULTIRANGE)")
         self.validate_identity("CAST(x AS INT8RANGE)")
@@ -187,6 +207,7 @@ class TestPostgres(Validator):
             "SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY amount)",
             write={
                 "databricks": "SELECT PERCENTILE_APPROX(amount, 0.5)",
+                "postgres": "SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY amount)",
                 "presto": "SELECT APPROX_PERCENTILE(amount, 0.5)",
                 "spark": "SELECT PERCENTILE_APPROX(amount, 0.5)",
                 "trino": "SELECT APPROX_PERCENTILE(amount, 0.5)",
@@ -253,8 +274,8 @@ class TestPostgres(Validator):
             "GENERATE_SERIES('2019-01-01'::TIMESTAMP, NOW(), '1day')",
             write={
                 "postgres": "GENERATE_SERIES(CAST('2019-01-01' AS TIMESTAMP), CURRENT_TIMESTAMP, INTERVAL '1 day')",
-                "presto": "SEQUENCE(TRY_CAST('2019-01-01' AS TIMESTAMP), CAST(CURRENT_TIMESTAMP AS TIMESTAMP), INTERVAL '1' day)",
-                "trino": "SEQUENCE(TRY_CAST('2019-01-01' AS TIMESTAMP), CAST(CURRENT_TIMESTAMP AS TIMESTAMP), INTERVAL '1' day)",
+                "presto": "SEQUENCE(CAST('2019-01-01' AS TIMESTAMP), CAST(CURRENT_TIMESTAMP AS TIMESTAMP), INTERVAL '1' day)",
+                "trino": "SEQUENCE(CAST('2019-01-01' AS TIMESTAMP), CAST(CURRENT_TIMESTAMP AS TIMESTAMP), INTERVAL '1' day)",
             },
         )
         self.validate_all(
@@ -341,10 +362,10 @@ class TestPostgres(Validator):
         self.validate_all(
             "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname",
             write={
-                "postgres": "SELECT fname, lname, age FROM person ORDER BY age DESC, fname, lname",
-                "presto": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname, lname",
-                "hive": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname NULLS LAST, lname NULLS LAST",
-                "spark": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname NULLS LAST, lname NULLS LAST",
+                "postgres": "SELECT fname, lname, age FROM person ORDER BY age DESC, fname ASC, lname",
+                "presto": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC, lname",
+                "hive": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname NULLS LAST",
+                "spark": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname NULLS LAST",
             },
         )
         self.validate_all(
@@ -412,7 +433,7 @@ class TestPostgres(Validator):
             },
         )
         self.validate_all(
-            "SELECT * FROM r CROSS JOIN LATERAL unnest(array(1)) AS s(location)",
+            "SELECT * FROM r CROSS JOIN LATERAL UNNEST(ARRAY[1]) AS s(location)",
             write={
                 "postgres": "SELECT * FROM r CROSS JOIN LATERAL UNNEST(ARRAY[1]) AS s(location)",
             },
@@ -468,7 +489,7 @@ class TestPostgres(Validator):
             """SELECT JSON_ARRAY_ELEMENTS((foo->'sections')::JSON) AS sections""",
             write={
                 "postgres": """SELECT JSON_ARRAY_ELEMENTS(CAST((foo -> 'sections') AS JSON)) AS sections""",
-                "presto": """SELECT JSON_ARRAY_ELEMENTS(TRY_CAST((JSON_EXTRACT(foo, 'sections')) AS JSON)) AS sections""",
+                "presto": """SELECT JSON_ARRAY_ELEMENTS(CAST((JSON_EXTRACT(foo, 'sections')) AS JSON)) AS sections""",
             },
         )
         self.validate_all(
@@ -525,6 +546,54 @@ class TestPostgres(Validator):
             write={"postgres": "CAST(x AS CSTRING)"},
         )
         self.validate_all(
+            "x::oid",
+            write={"postgres": "CAST(x AS OID)"},
+        )
+        self.validate_all(
+            "x::regclass",
+            write={"postgres": "CAST(x AS REGCLASS)"},
+        )
+        self.validate_all(
+            "x::regcollation",
+            write={"postgres": "CAST(x AS REGCOLLATION)"},
+        )
+        self.validate_all(
+            "x::regconfig",
+            write={"postgres": "CAST(x AS REGCONFIG)"},
+        )
+        self.validate_all(
+            "x::regdictionary",
+            write={"postgres": "CAST(x AS REGDICTIONARY)"},
+        )
+        self.validate_all(
+            "x::regnamespace",
+            write={"postgres": "CAST(x AS REGNAMESPACE)"},
+        )
+        self.validate_all(
+            "x::regoper",
+            write={"postgres": "CAST(x AS REGOPER)"},
+        )
+        self.validate_all(
+            "x::regoperator",
+            write={"postgres": "CAST(x AS REGOPERATOR)"},
+        )
+        self.validate_all(
+            "x::regproc",
+            write={"postgres": "CAST(x AS REGPROC)"},
+        )
+        self.validate_all(
+            "x::regprocedure",
+            write={"postgres": "CAST(x AS REGPROCEDURE)"},
+        )
+        self.validate_all(
+            "x::regrole",
+            write={"postgres": "CAST(x AS REGROLE)"},
+        )
+        self.validate_all(
+            "x::regtype",
+            write={"postgres": "CAST(x AS REGTYPE)"},
+        )
+        self.validate_all(
             "TRIM(BOTH 'as' FROM 'as string as')",
             write={
                 "postgres": "TRIM(BOTH 'as' FROM 'as string as')",
@@ -559,6 +628,12 @@ class TestPostgres(Validator):
                 "snowflake": "MERGE INTO x USING (SELECT id) AS y ON a = b WHEN MATCHED THEN UPDATE SET x.a = y.b",
             },
         )
+        self.validate_all(
+            "MERGE INTO x USING (SELECT id) AS y ON a = b WHEN MATCHED THEN UPDATE SET x.a = y.b WHEN NOT MATCHED THEN INSERT (a, b) VALUES (y.a, y.b)",
+            write={
+                "postgres": "MERGE INTO x USING (SELECT id) AS y ON a = b WHEN MATCHED THEN UPDATE SET a = y.b WHEN NOT MATCHED THEN INSERT (a, b) VALUES (y.a, y.b)",
+            },
+        )
 
         self.validate_all(
             "x / y ^ z",
@@ -568,7 +643,7 @@ class TestPostgres(Validator):
             },
         )
 
-        self.assertIsInstance(parse_one("id::UUID", read="postgres"), exp.TryCast)
+        self.assertIsInstance(parse_one("id::UUID", read="postgres"), exp.Cast)
 
     def test_bool_or(self):
         self.validate_all(
@@ -596,7 +671,7 @@ class TestPostgres(Validator):
             "a || b",
             write={
                 "": "a || b",
-                "clickhouse": "CONCAT(CAST(a AS TEXT), CAST(b AS TEXT))",
+                "clickhouse": "CONCAT(CAST(a AS String), CAST(b AS String))",
                 "duckdb": "a || b",
                 "postgres": "a || b",
                 "presto": "CONCAT(CAST(a AS VARCHAR), CAST(b AS VARCHAR))",

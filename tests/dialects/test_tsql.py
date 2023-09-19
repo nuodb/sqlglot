@@ -6,6 +6,72 @@ class TestTSQL(Validator):
     dialect = "tsql"
 
     def test_tsql(self):
+        self.validate_all(
+            "CREATE TABLE x ( A INTEGER NOT NULL, B INTEGER NULL )",
+            write={
+                "tsql": "CREATE TABLE x (A INTEGER NOT NULL, B INTEGER NULL)",
+                "hive": "CREATE TABLE x (A INT NOT NULL, B INT)",
+            },
+        )
+
+        self.validate_identity(
+            'CREATE TABLE x (CONSTRAINT "pk_mytable" UNIQUE NONCLUSTERED (a DESC)) ON b (c)'
+        )
+
+        self.validate_all(
+            """
+            CREATE TABLE x(
+                [zip_cd] [varchar](5) NULL NOT FOR REPLICATION,
+                [zip_cd_mkey] [varchar](5) NOT NULL,
+                CONSTRAINT [pk_mytable] PRIMARY KEY CLUSTERED ([zip_cd_mkey] ASC)
+                WITH (PAD_INDEX = ON, STATISTICS_NORECOMPUTE = OFF) ON [INDEX]
+            ) ON [SECONDARY]
+            """,
+            write={
+                "tsql": 'CREATE TABLE x ("zip_cd" VARCHAR(5) NULL NOT FOR REPLICATION, "zip_cd_mkey" VARCHAR(5) NOT NULL, CONSTRAINT "pk_mytable" PRIMARY KEY CLUSTERED ("zip_cd_mkey" ASC)  WITH (PAD_INDEX=ON, STATISTICS_NORECOMPUTE=OFF) ON "INDEX") ON "SECONDARY"',
+                "spark2": "CREATE TABLE x (`zip_cd` VARCHAR(5), `zip_cd_mkey` VARCHAR(5) NOT NULL, CONSTRAINT `pk_mytable` PRIMARY KEY (`zip_cd_mkey`))",
+            },
+        )
+
+        self.validate_identity("CREATE TABLE x (A INTEGER NOT NULL, B INTEGER NULL)")
+
+        self.validate_all(
+            "CREATE TABLE x ( A INTEGER NOT NULL, B INTEGER NULL )",
+            write={
+                "hive": "CREATE TABLE x (A INT NOT NULL, B INT)",
+            },
+        )
+
+        self.validate_identity(
+            "CREATE TABLE tbl (a AS (x + 1) PERSISTED, b AS (y + 2), c AS (y / 3) PERSISTED NOT NULL)"
+        )
+
+        self.validate_identity(
+            "CREATE TABLE [db].[tbl]([a] [int])", 'CREATE TABLE "db"."tbl" ("a" INTEGER)'
+        )
+
+        projection = parse_one("SELECT a = 1", read="tsql").selects[0]
+        projection.assert_is(exp.Alias)
+        projection.args["alias"].assert_is(exp.Identifier)
+
+        self.validate_all(
+            "IF OBJECT_ID('tempdb.dbo.#TempTableName', 'U') IS NOT NULL DROP TABLE #TempTableName",
+            write={
+                "tsql": "DROP TABLE IF EXISTS #TempTableName",
+                "spark": "DROP TABLE IF EXISTS TempTableName",
+            },
+        )
+
+        self.validate_identity(
+            "MERGE INTO mytable WITH (HOLDLOCK) AS T USING mytable_merge AS S "
+            "ON (T.user_id = S.user_id) WHEN NOT MATCHED THEN INSERT (c1, c2) VALUES (S.c1, S.c2)"
+        )
+        self.validate_identity("UPDATE STATISTICS x")
+        self.validate_identity("UPDATE x SET y = 1 OUTPUT x.a, x.b INTO @y FROM y")
+        self.validate_identity("UPDATE x SET y = 1 OUTPUT x.a, x.b FROM y")
+        self.validate_identity("INSERT INTO x (y) OUTPUT x.a, x.b INTO l SELECT * FROM z")
+        self.validate_identity("INSERT INTO x (y) OUTPUT x.a, x.b SELECT * FROM z")
+        self.validate_identity("DELETE x OUTPUT x.a FROM z")
         self.validate_identity("SELECT * FROM t WITH (TABLOCK, INDEX(myindex))")
         self.validate_identity("SELECT * FROM t WITH (NOWAIT)")
         self.validate_identity("SELECT CASE WHEN a > 1 THEN b END")
@@ -17,27 +83,43 @@ class TestTSQL(Validator):
         self.validate_identity("PRINT @TestVariable")
         self.validate_identity("SELECT Employee_ID, Department_ID FROM @MyTableVar")
         self.validate_identity("INSERT INTO @TestTable VALUES (1, 'Value1', 12, 20)")
-        self.validate_identity(
-            "SELECT x FROM @MyTableVar AS m JOIN Employee ON m.EmployeeID = Employee.EmployeeID"
-        )
         self.validate_identity('SELECT "x"."y" FROM foo')
         self.validate_identity("SELECT * FROM #foo")
         self.validate_identity("SELECT * FROM ##foo")
+        self.validate_identity("SELECT a = 1", "SELECT 1 AS a")
+        self.validate_identity(
+            "SELECT a = 1 UNION ALL SELECT a = b", "SELECT 1 AS a UNION ALL SELECT b AS a"
+        )
+        self.validate_identity(
+            "SELECT x FROM @MyTableVar AS m JOIN Employee ON m.EmployeeID = Employee.EmployeeID"
+        )
         self.validate_identity(
             "SELECT DISTINCT DepartmentName, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY BaseRate) OVER (PARTITION BY DepartmentName) AS MedianCont FROM dbo.DimEmployee"
         )
 
         self.validate_all(
+            "SELECT DATEPART(year, CAST('2017-01-01' AS DATE))",
+            read={"postgres": "SELECT DATE_PART('year', '2017-01-01'::DATE)"},
+        )
+        self.validate_all(
+            "SELECT DATEPART(month, CAST('2017-03-01' AS DATE))",
+            read={"postgres": "SELECT DATE_PART('month', '2017-03-01'::DATE)"},
+        )
+        self.validate_all(
+            "SELECT DATEPART(day, CAST('2017-01-02' AS DATE))",
+            read={"postgres": "SELECT DATE_PART('day', '2017-01-02'::DATE)"},
+        )
+        self.validate_all(
             "SELECT CAST([a].[b] AS SMALLINT) FROM foo",
             write={
                 "tsql": 'SELECT CAST("a"."b" AS SMALLINT) FROM foo',
-                "spark": "SELECT CAST(`a`.`b` AS SHORT) FROM foo",
+                "spark": "SELECT CAST(`a`.`b` AS SMALLINT) FROM foo",
             },
         )
         self.validate_all(
             "CONVERT(INT, CONVERT(NUMERIC, '444.75'))",
             write={
-                "mysql": "CAST(CAST('444.75' AS DECIMAL) AS INT)",
+                "mysql": "CAST(CAST('444.75' AS DECIMAL) AS SIGNED)",
                 "tsql": "CAST(CAST('444.75' AS NUMERIC) AS INTEGER)",
             },
         )
@@ -53,10 +135,10 @@ class TestTSQL(Validator):
         self.validate_all(
             "STRING_AGG(x, '|') WITHIN GROUP (ORDER BY z ASC)",
             write={
-                "tsql": "STRING_AGG(x, '|') WITHIN GROUP (ORDER BY z)",
-                "mysql": "GROUP_CONCAT(x ORDER BY z SEPARATOR '|')",
+                "tsql": "STRING_AGG(x, '|') WITHIN GROUP (ORDER BY z ASC)",
+                "mysql": "GROUP_CONCAT(x ORDER BY z ASC SEPARATOR '|')",
                 "sqlite": "GROUP_CONCAT(x, '|')",
-                "postgres": "STRING_AGG(x, '|' ORDER BY z NULLS FIRST)",
+                "postgres": "STRING_AGG(x, '|' ORDER BY z ASC NULLS FIRST)",
             },
         )
         self.validate_all(
@@ -72,7 +154,7 @@ class TestTSQL(Validator):
             "SELECT CAST([a].[b] AS SMALLINT) FROM foo",
             write={
                 "tsql": 'SELECT CAST("a"."b" AS SMALLINT) FROM foo',
-                "spark": "SELECT CAST(`a`.`b` AS SHORT) FROM foo",
+                "spark": "SELECT CAST(`a`.`b` AS SMALLINT) FROM foo",
             },
         )
         self.validate_all(
@@ -143,7 +225,396 @@ class TestTSQL(Validator):
             },
         )
 
+    def test__types_ints(self):
+        self.validate_all(
+            "CAST(X AS INT)",
+            write={
+                "hive": "CAST(X AS INT)",
+                "spark2": "CAST(X AS INT)",
+                "spark": "CAST(X AS INT)",
+                "tsql": "CAST(X AS INTEGER)",
+            },
+        )
+
+        self.validate_all(
+            "CAST(X AS BIGINT)",
+            write={
+                "hive": "CAST(X AS BIGINT)",
+                "spark2": "CAST(X AS BIGINT)",
+                "spark": "CAST(X AS BIGINT)",
+                "tsql": "CAST(X AS BIGINT)",
+            },
+        )
+
+        self.validate_all(
+            "CAST(X AS SMALLINT)",
+            write={
+                "hive": "CAST(X AS SMALLINT)",
+                "spark2": "CAST(X AS SMALLINT)",
+                "spark": "CAST(X AS SMALLINT)",
+                "tsql": "CAST(X AS SMALLINT)",
+            },
+        )
+
+        self.validate_all(
+            "CAST(X AS TINYINT)",
+            write={
+                "hive": "CAST(X AS TINYINT)",
+                "spark2": "CAST(X AS TINYINT)",
+                "spark": "CAST(X AS TINYINT)",
+                "tsql": "CAST(X AS TINYINT)",
+            },
+        )
+
+    def test_types_decimals(self):
+        self.validate_all(
+            "CAST(x as FLOAT)",
+            write={
+                "spark": "CAST(x AS FLOAT)",
+                "tsql": "CAST(x AS FLOAT)",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as FLOAT(32))",
+            write={"tsql": "CAST(x AS FLOAT(32))", "hive": "CAST(x AS FLOAT)"},
+        )
+
+        self.validate_all(
+            "CAST(x as FLOAT(64))",
+            write={"tsql": "CAST(x AS FLOAT(64))", "spark": "CAST(x AS DOUBLE)"},
+        )
+
+        self.validate_all(
+            "CAST(x as FLOAT(6))", write={"tsql": "CAST(x AS FLOAT(6))", "hive": "CAST(x AS FLOAT)"}
+        )
+
+        self.validate_all(
+            "CAST(x as FLOAT(36))",
+            write={"tsql": "CAST(x AS FLOAT(36))", "hive": "CAST(x AS DOUBLE)"},
+        )
+
+        self.validate_all(
+            "CAST(x as FLOAT(99))",
+            write={"tsql": "CAST(x AS FLOAT(99))", "hive": "CAST(x AS DOUBLE)"},
+        )
+
+        self.validate_all(
+            "CAST(x as DOUBLE)",
+            write={
+                "spark": "CAST(x AS DOUBLE)",
+                "tsql": "CAST(x AS DOUBLE)",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as DECIMAL(15, 4))",
+            write={
+                "spark": "CAST(x AS DECIMAL(15, 4))",
+                "tsql": "CAST(x AS NUMERIC(15, 4))",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as NUMERIC(13,3))",
+            write={
+                "spark": "CAST(x AS DECIMAL(13, 3))",
+                "tsql": "CAST(x AS NUMERIC(13, 3))",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as MONEY)",
+            write={
+                "spark": "CAST(x AS DECIMAL(15, 4))",
+                "tsql": "CAST(x AS MONEY)",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as SMALLMONEY)",
+            write={
+                "spark": "CAST(x AS DECIMAL(6, 4))",
+                "tsql": "CAST(x AS SMALLMONEY)",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as REAL)",
+            write={
+                "spark": "CAST(x AS FLOAT)",
+                "tsql": "CAST(x AS FLOAT)",
+            },
+        )
+
+    def test_types_string(self):
+        self.validate_all(
+            "CAST(x as CHAR(1))",
+            write={
+                "spark": "CAST(x AS CHAR(1))",
+                "tsql": "CAST(x AS CHAR(1))",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as VARCHAR(2))",
+            write={
+                "spark": "CAST(x AS VARCHAR(2))",
+                "tsql": "CAST(x AS VARCHAR(2))",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as NCHAR(1))",
+            write={
+                "spark": "CAST(x AS CHAR(1))",
+                "tsql": "CAST(x AS CHAR(1))",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as NVARCHAR(2))",
+            write={
+                "spark": "CAST(x AS VARCHAR(2))",
+                "tsql": "CAST(x AS VARCHAR(2))",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as UNIQUEIDENTIFIER)",
+            write={
+                "spark": "CAST(x AS STRING)",
+                "tsql": "CAST(x AS UNIQUEIDENTIFIER)",
+            },
+        )
+
+    def test_types_date(self):
+        self.validate_all(
+            "CAST(x as DATE)",
+            write={
+                "spark": "CAST(x AS DATE)",
+                "tsql": "CAST(x AS DATE)",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as DATE)",
+            write={
+                "spark": "CAST(x AS DATE)",
+                "tsql": "CAST(x AS DATE)",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as TIME(4))",
+            write={
+                "spark": "CAST(x AS TIMESTAMP)",
+                "tsql": "CAST(x AS TIME(4))",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as DATETIME2)",
+            write={
+                "spark": "CAST(x AS TIMESTAMP)",
+                "tsql": "CAST(x AS DATETIME2)",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as DATETIMEOFFSET)",
+            write={
+                "spark": "CAST(x AS TIMESTAMP)",
+                "tsql": "CAST(x AS DATETIMEOFFSET)",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as SMALLDATETIME)",
+            write={
+                "spark": "CAST(x AS TIMESTAMP)",
+                "tsql": "CAST(x AS DATETIME2)",
+            },
+        )
+
+    def test_types_bin(self):
+        self.validate_all(
+            "CAST(x as BIT)",
+            write={
+                "spark": "CAST(x AS BOOLEAN)",
+                "tsql": "CAST(x AS BIT)",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x as VARBINARY)",
+            write={
+                "spark": "CAST(x AS BINARY)",
+                "tsql": "CAST(x AS VARBINARY)",
+            },
+        )
+
+        self.validate_all(
+            "CAST(x AS BOOLEAN)",
+            write={"tsql": "CAST(x AS BIT)"},
+        )
+
+        self.validate_all("a = TRUE", write={"tsql": "a = 1"})
+
+        self.validate_all("a != FALSE", write={"tsql": "a <> 0"})
+
+        self.validate_all("a IS TRUE", write={"tsql": "a = 1"})
+
+        self.validate_all("a IS NOT FALSE", write={"tsql": "NOT a = 0"})
+
+        self.validate_all(
+            "CASE WHEN a IN (TRUE) THEN 'y' ELSE 'n' END",
+            write={"tsql": "CASE WHEN a IN (1) THEN 'y' ELSE 'n' END"},
+        )
+
+        self.validate_all(
+            "CASE WHEN a NOT IN (FALSE) THEN 'y' ELSE 'n' END",
+            write={"tsql": "CASE WHEN NOT a IN (0) THEN 'y' ELSE 'n' END"},
+        )
+
+        self.validate_all("SELECT TRUE, FALSE", write={"tsql": "SELECT 1, 0"})
+
+        self.validate_all("SELECT TRUE AS a, FALSE AS b", write={"tsql": "SELECT 1 AS a, 0 AS b"})
+
+        self.validate_all(
+            "SELECT 1 FROM a WHERE TRUE", write={"tsql": "SELECT 1 FROM a WHERE (1 = 1)"}
+        )
+
+        self.validate_all(
+            "CASE WHEN TRUE THEN 'y' WHEN FALSE THEN 'n' ELSE NULL END",
+            write={"tsql": "CASE WHEN (1 = 1) THEN 'y' WHEN (1 = 0) THEN 'n' ELSE NULL END"},
+        )
+
+    def test_ddl(self):
+        self.validate_all(
+            "CREATE TABLE tbl (id INTEGER IDENTITY PRIMARY KEY)",
+            read={
+                "mysql": "CREATE TABLE tbl (id INT AUTO_INCREMENT PRIMARY KEY)",
+                "tsql": "CREATE TABLE tbl (id INTEGER IDENTITY PRIMARY KEY)",
+            },
+        )
+        self.validate_all(
+            "CREATE TABLE tbl (id INTEGER NOT NULL IDENTITY(10, 1) PRIMARY KEY)",
+            read={
+                "postgres": "CREATE TABLE tbl (id INT NOT NULL GENERATED ALWAYS AS IDENTITY (START WITH 10) PRIMARY KEY)",
+                "tsql": "CREATE TABLE tbl (id INTEGER NOT NULL IDENTITY(10, 1) PRIMARY KEY)",
+            },
+        )
+        self.validate_all(
+            "SELECT * INTO foo.bar.baz FROM (SELECT * FROM a.b.c) AS temp",
+            read={
+                "": "CREATE TABLE foo.bar.baz AS SELECT * FROM a.b.c",
+            },
+        )
+        self.validate_all(
+            "IF NOT EXISTS (SELECT * FROM sys.indexes WHERE object_id = object_id('db.tbl') AND name = 'idx') EXEC('CREATE INDEX idx ON db.tbl')",
+            read={
+                "": "CREATE INDEX IF NOT EXISTS idx ON db.tbl",
+            },
+        )
+
+        self.validate_all(
+            "IF NOT EXISTS (SELECT * FROM information_schema.schemata WHERE schema_name = 'foo') EXEC('CREATE SCHEMA foo')",
+            read={
+                "": "CREATE SCHEMA IF NOT EXISTS foo",
+            },
+        )
+        self.validate_all(
+            "IF NOT EXISTS (SELECT * FROM information_schema.tables WHERE table_name = 'baz' AND table_schema = 'bar' AND table_catalog = 'foo') EXEC('CREATE TABLE foo.bar.baz (a INTEGER)')",
+            read={
+                "": "CREATE TABLE IF NOT EXISTS foo.bar.baz (a INTEGER)",
+            },
+        )
+        self.validate_all(
+            "CREATE OR ALTER VIEW a.b AS SELECT 1",
+            read={
+                "": "CREATE OR REPLACE VIEW a.b AS SELECT 1",
+            },
+            write={
+                "tsql": "CREATE OR ALTER VIEW a.b AS SELECT 1",
+            },
+        )
+
+        self.validate_all(
+            "ALTER TABLE a ADD b INTEGER, c INTEGER",
+            read={
+                "": "ALTER TABLE a ADD COLUMN b INT, ADD COLUMN c INT",
+            },
+            write={
+                "": "ALTER TABLE a ADD COLUMN b INT, ADD COLUMN c INT",
+                "tsql": "ALTER TABLE a ADD b INTEGER, c INTEGER",
+            },
+        )
+
+        self.validate_all(
+            "CREATE TABLE #mytemp (a INTEGER, b CHAR(2), c TIME(4), d FLOAT(24))",
+            write={
+                "spark": "CREATE TEMPORARY TABLE mytemp (a INT, b CHAR(2), c TIMESTAMP, d FLOAT)",
+                "tsql": "CREATE TABLE #mytemp (a INTEGER, b CHAR(2), c TIME(4), d FLOAT(24))",
+            },
+        )
+        self.validate_all(
+            "CREATE TABLE #mytemptable (a INTEGER)",
+            read={
+                "duckdb": "CREATE TEMPORARY TABLE mytemptable (a INT)",
+            },
+            write={
+                "tsql": "CREATE TABLE #mytemptable (a INTEGER)",
+                "snowflake": "CREATE TEMPORARY TABLE mytemptable (a INT)",
+                "duckdb": "CREATE TEMPORARY TABLE mytemptable (a INT)",
+                "oracle": "CREATE TEMPORARY TABLE mytemptable (a NUMBER)",
+            },
+        )
+
+    def test_transaction(self):
+        # BEGIN { TRAN | TRANSACTION }
+        #    [ { transaction_name | @tran_name_variable }
+        #    [ WITH MARK [ 'description' ] ]
+        #    ]
+        # [ ; ]
+        self.validate_identity("BEGIN TRANSACTION")
+        self.validate_all("BEGIN TRAN", write={"tsql": "BEGIN TRANSACTION"})
+        self.validate_identity("BEGIN TRANSACTION transaction_name")
+        self.validate_identity("BEGIN TRANSACTION @tran_name_variable")
+        self.validate_identity("BEGIN TRANSACTION transaction_name WITH MARK 'description'")
+
+    def test_commit(self):
+        # COMMIT [ { TRAN | TRANSACTION }  [ transaction_name | @tran_name_variable ] ] [ WITH ( DELAYED_DURABILITY = { OFF | ON } ) ] [ ; ]
+
+        self.validate_all("COMMIT", write={"tsql": "COMMIT TRANSACTION"})
+        self.validate_all("COMMIT TRAN", write={"tsql": "COMMIT TRANSACTION"})
+        self.validate_identity("COMMIT TRANSACTION")
+        self.validate_identity("COMMIT TRANSACTION transaction_name")
+        self.validate_identity("COMMIT TRANSACTION @tran_name_variable")
+
+        self.validate_identity(
+            "COMMIT TRANSACTION @tran_name_variable WITH (DELAYED_DURABILITY = ON)"
+        )
+        self.validate_identity(
+            "COMMIT TRANSACTION transaction_name WITH (DELAYED_DURABILITY = OFF)"
+        )
+
+    def test_rollback(self):
+        # Applies to SQL Server and Azure SQL Database
+        # ROLLBACK { TRAN | TRANSACTION }
+        #     [ transaction_name | @tran_name_variable
+        #     | savepoint_name | @savepoint_variable ]
+        # [ ; ]
+        self.validate_all("ROLLBACK", write={"tsql": "ROLLBACK TRANSACTION"})
+        self.validate_all("ROLLBACK TRAN", write={"tsql": "ROLLBACK TRANSACTION"})
+        self.validate_identity("ROLLBACK TRANSACTION")
+        self.validate_identity("ROLLBACK TRANSACTION transaction_name")
+        self.validate_identity("ROLLBACK TRANSACTION @tran_name_variable")
+
     def test_udf(self):
+        self.validate_identity(
+            "DECLARE @DWH_DateCreated DATETIME = CONVERT(DATETIME, getdate(), 104)"
+        )
         self.validate_identity(
             "CREATE PROCEDURE foo @a INTEGER, @b INTEGER AS SELECT @a = SUM(bla) FROM baz AS bar"
         )
@@ -200,6 +671,12 @@ WHERE
             pretty=True,
         )
 
+    def test_procedure_keywords(self):
+        self.validate_identity("BEGIN")
+        self.validate_identity("END")
+        self.validate_identity("SET XACT_ABORT ON")
+
+    def test_fullproc(self):
         sql = """
             CREATE procedure [TRANSF].[SP_Merge_Sales_Real]
                 @Loadid INTEGER
@@ -227,6 +704,26 @@ WHERE
             "DECLARE @SalesAmountBefore float",
             'SELECT @SalesAmountBefore = SUM(SalesAmount) FROM TRANSF."Pre_Merge_Sales_Real" AS S',
             "END",
+        ]
+
+        for expr, expected_sql in zip(parse(sql, read="tsql"), expected_sqls):
+            self.assertEqual(expr.sql(dialect="tsql"), expected_sql)
+
+        sql = """
+            CREATE PROC [dbo].[transform_proc] AS
+
+            DECLARE @CurrentDate VARCHAR(20);
+            SET @CurrentDate = CONVERT(VARCHAR(20), GETDATE(), 120);
+
+            CREATE TABLE [target_schema].[target_table]
+            (a INTEGER)
+            WITH (DISTRIBUTION = REPLICATE, HEAP);
+        """
+
+        expected_sqls = [
+            'CREATE PROC "dbo"."transform_proc" AS DECLARE @CurrentDate VARCHAR(20)',
+            "SET @CurrentDate = CAST(FORMAT(GETDATE(), 'yyyy-MM-dd HH:mm:ss') AS VARCHAR(20))",
+            'CREATE TABLE "target_schema"."target_table" (a INTEGER) WITH (DISTRIBUTION=REPLICATE, HEAP)',
         ]
 
         for expr, expected_sql in zip(parse(sql, read="tsql"), expected_sqls):
@@ -281,19 +778,20 @@ WHERE
 
     def test_datename(self):
         self.validate_all(
-            "SELECT DATENAME(mm,'01-01-1970')",
-            write={"spark": "SELECT DATE_FORMAT('01-01-1970', 'MMMM')"},
+            "SELECT DATENAME(mm,'1970-01-01')",
+            write={"spark": "SELECT DATE_FORMAT(CAST('1970-01-01' AS TIMESTAMP), 'MMMM')"},
         )
         self.validate_all(
-            "SELECT DATENAME(dw,'01-01-1970')",
-            write={"spark": "SELECT DATE_FORMAT('01-01-1970', 'EEEE')"},
+            "SELECT DATENAME(dw,'1970-01-01')",
+            write={"spark": "SELECT DATE_FORMAT(CAST('1970-01-01' AS TIMESTAMP), 'EEEE')"},
         )
 
     def test_datepart(self):
         self.validate_all(
-            "SELECT DATEPART(month,'01-01-1970')",
-            write={"spark": "SELECT DATE_FORMAT('01-01-1970', 'MM')"},
+            "SELECT DATEPART(month,'1970-01-01')",
+            write={"spark": "SELECT DATE_FORMAT(CAST('1970-01-01' AS TIMESTAMP), 'MM')"},
         )
+        self.validate_identity("DATEPART(YEAR, x)", "FORMAT(CAST(x AS DATETIME2), 'yyyy')")
 
     def test_convert_date_format(self):
         self.validate_all(
@@ -449,14 +947,14 @@ WHERE
         self.validate_all(
             "SELECT CONVERT(VARCHAR(10), testdb.dbo.test.x, 120) y FROM testdb.dbo.test",
             write={
-                "mysql": "SELECT CAST(DATE_FORMAT(testdb.dbo.test.x, '%Y-%m-%d %T') AS VARCHAR(10)) AS y FROM testdb.dbo.test",
+                "mysql": "SELECT CAST(DATE_FORMAT(testdb.dbo.test.x, '%Y-%m-%d %T') AS CHAR(10)) AS y FROM testdb.dbo.test",
                 "spark": "SELECT CAST(DATE_FORMAT(testdb.dbo.test.x, 'yyyy-MM-dd HH:mm:ss') AS VARCHAR(10)) AS y FROM testdb.dbo.test",
             },
         )
         self.validate_all(
             "SELECT CONVERT(VARCHAR(10), y.x) z FROM testdb.dbo.test y",
             write={
-                "mysql": "SELECT CAST(y.x AS VARCHAR(10)) AS z FROM testdb.dbo.test AS y",
+                "mysql": "SELECT CAST(y.x AS CHAR(10)) AS z FROM testdb.dbo.test AS y",
                 "spark": "SELECT CAST(y.x AS VARCHAR(10)) AS z FROM testdb.dbo.test AS y",
             },
         )
@@ -491,35 +989,57 @@ WHERE
         )
 
     def test_date_diff(self):
-        self.validate_identity("SELECT DATEDIFF(year, '2020/01/01', '2021/01/01')")
-
+        self.validate_identity("SELECT DATEDIFF(hour, 1.5, '2021-01-01')")
+        self.validate_identity(
+            "SELECT DATEDIFF(year, '2020-01-01', '2021-01-01')",
+            "SELECT DATEDIFF(year, CAST('2020-01-01' AS DATETIME2), CAST('2021-01-01' AS DATETIME2))",
+        )
         self.validate_all(
-            "SELECT DATEDIFF(year, '2020/01/01', '2021/01/01')",
+            "SELECT DATEDIFF(quarter, 0, '2021-01-01')",
             write={
-                "tsql": "SELECT DATEDIFF(year, '2020/01/01', '2021/01/01')",
-                "spark": "SELECT DATEDIFF(year, '2020/01/01', '2021/01/01')",
-                "spark2": "SELECT MONTHS_BETWEEN('2021/01/01', '2020/01/01') / 12",
+                "tsql": "SELECT DATEDIFF(quarter, CAST('1900-01-01' AS DATETIME2), CAST('2021-01-01' AS DATETIME2))",
+                "spark": "SELECT DATEDIFF(quarter, CAST('1900-01-01' AS TIMESTAMP), CAST('2021-01-01' AS TIMESTAMP))",
+                "duckdb": "SELECT DATE_DIFF('quarter', CAST('1900-01-01' AS TIMESTAMP), CAST('2021-01-01' AS TIMESTAMP))",
             },
         )
         self.validate_all(
-            "SELECT DATEDIFF(mm, 'start','end')",
+            "SELECT DATEDIFF(day, 1, '2021-01-01')",
             write={
-                "databricks": "SELECT DATEDIFF(month, 'start', 'end')",
-                "spark2": "SELECT MONTHS_BETWEEN('end', 'start')",
-                "tsql": "SELECT DATEDIFF(month, 'start', 'end')",
+                "tsql": "SELECT DATEDIFF(day, CAST('1900-01-02' AS DATETIME2), CAST('2021-01-01' AS DATETIME2))",
+                "spark": "SELECT DATEDIFF(day, CAST('1900-01-02' AS TIMESTAMP), CAST('2021-01-01' AS TIMESTAMP))",
+                "duckdb": "SELECT DATE_DIFF('day', CAST('1900-01-02' AS TIMESTAMP), CAST('2021-01-01' AS TIMESTAMP))",
+            },
+        )
+        self.validate_all(
+            "SELECT DATEDIFF(year, '2020/01/01', '2021/01/01')",
+            write={
+                "tsql": "SELECT DATEDIFF(year, CAST('2020/01/01' AS DATETIME2), CAST('2021/01/01' AS DATETIME2))",
+                "spark": "SELECT DATEDIFF(year, CAST('2020/01/01' AS TIMESTAMP), CAST('2021/01/01' AS TIMESTAMP))",
+                "spark2": "SELECT MONTHS_BETWEEN(CAST('2021/01/01' AS TIMESTAMP), CAST('2020/01/01' AS TIMESTAMP)) / 12",
+            },
+        )
+        self.validate_all(
+            "SELECT DATEDIFF(mm, 'start', 'end')",
+            write={
+                "databricks": "SELECT DATEDIFF(month, CAST('start' AS TIMESTAMP), CAST('end' AS TIMESTAMP))",
+                "spark2": "SELECT MONTHS_BETWEEN(CAST('end' AS TIMESTAMP), CAST('start' AS TIMESTAMP))",
+                "tsql": "SELECT DATEDIFF(month, CAST('start' AS DATETIME2), CAST('end' AS DATETIME2))",
             },
         )
         self.validate_all(
             "SELECT DATEDIFF(quarter, 'start', 'end')",
             write={
-                "databricks": "SELECT DATEDIFF(quarter, 'start', 'end')",
-                "spark": "SELECT DATEDIFF(quarter, 'start', 'end')",
-                "spark2": "SELECT MONTHS_BETWEEN('end', 'start') / 3",
-                "tsql": "SELECT DATEDIFF(quarter, 'start', 'end')",
+                "databricks": "SELECT DATEDIFF(quarter, CAST('start' AS TIMESTAMP), CAST('end' AS TIMESTAMP))",
+                "spark": "SELECT DATEDIFF(quarter, CAST('start' AS TIMESTAMP), CAST('end' AS TIMESTAMP))",
+                "spark2": "SELECT MONTHS_BETWEEN(CAST('end' AS TIMESTAMP), CAST('start' AS TIMESTAMP)) / 3",
+                "tsql": "SELECT DATEDIFF(quarter, CAST('start' AS DATETIME2), CAST('end' AS DATETIME2))",
             },
         )
 
     def test_iif(self):
+        self.validate_identity(
+            "SELECT IF(cond, 'True', 'False')", "SELECT IIF(cond, 'True', 'False')"
+        )
         self.validate_identity("SELECT IIF(cond, 'True', 'False')")
         self.validate_all(
             "SELECT IIF(cond, 'True', 'False');",
@@ -583,15 +1103,19 @@ WHERE
         )
 
     def test_format(self):
+        self.validate_identity("SELECT FORMAT(foo, 'dddd', 'de-CH')")
+        self.validate_identity("SELECT FORMAT(EndOfDayRate, 'N', 'en-us')")
         self.validate_identity("SELECT FORMAT('01-01-1991', 'd.mm.yyyy')")
         self.validate_identity("SELECT FORMAT(12345, '###.###.###')")
         self.validate_identity("SELECT FORMAT(1234567, 'f')")
+
         self.validate_all(
             "SELECT FORMAT(1000000.01,'###,###.###')",
             write={"spark": "SELECT FORMAT_NUMBER(1000000.01, '###,###.###')"},
         )
         self.validate_all(
-            "SELECT FORMAT(1234567, 'f')", write={"spark": "SELECT FORMAT_NUMBER(1234567, 'f')"}
+            "SELECT FORMAT(1234567, 'f')",
+            write={"spark": "SELECT FORMAT_NUMBER(1234567, 'f')"},
         )
         self.validate_all(
             "SELECT FORMAT('01-01-1991', 'dd.mm.yyyy')",
@@ -606,7 +1130,8 @@ WHERE
             write={"spark": "SELECT DATE_FORMAT(date_col, 'MMMM d')"},
         )
         self.validate_all(
-            "SELECT FORMAT(num_col, 'c')", write={"spark": "SELECT FORMAT_NUMBER(num_col, 'c')"}
+            "SELECT FORMAT(num_col, 'c')",
+            write={"spark": "SELECT FORMAT_NUMBER(num_col, 'c')"},
         )
 
     def test_string(self):
@@ -637,7 +1162,14 @@ WHERE
         expr = parse_one("#x", read="tsql")
         self.assertIsInstance(expr, exp.Column)
         self.assertIsInstance(expr.this, exp.Identifier)
+        self.assertTrue(expr.this.args.get("temporary"))
         self.assertEqual(expr.sql("tsql"), "#x")
+
+        expr = parse_one("##x", read="tsql")
+        self.assertIsInstance(expr, exp.Column)
+        self.assertIsInstance(expr.this, exp.Identifier)
+        self.assertTrue(expr.this.args.get("global"))
+        self.assertEqual(expr.sql("tsql"), "##x")
 
         expr = parse_one("@x", read="tsql")
         self.assertIsInstance(expr, exp.Parameter)
@@ -648,6 +1180,24 @@ WHERE
         self.assertIsInstance(table, exp.Table)
         self.assertIsInstance(table.this, exp.Parameter)
         self.assertIsInstance(table.this.this, exp.Var)
+
+    def test_temp_table(self):
+        self.validate_all(
+            "SELECT * FROM #mytemptable",
+            write={
+                "duckdb": "SELECT * FROM mytemptable",
+                "spark": "SELECT * FROM mytemptable",
+                "tsql": "SELECT * FROM #mytemptable",
+            },
+        )
+        self.validate_all(
+            "SELECT * FROM ##mytemptable",
+            write={
+                "duckdb": "SELECT * FROM mytemptable",
+                "spark": "SELECT * FROM mytemptable",
+                "tsql": "SELECT * FROM ##mytemptable",
+            },
+        )
 
     def test_system_time(self):
         self.validate_all(

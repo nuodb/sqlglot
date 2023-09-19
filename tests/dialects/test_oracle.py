@@ -1,3 +1,4 @@
+from sqlglot.errors import UnsupportedError
 from tests.dialects.test_dialect import Validator
 
 
@@ -5,6 +6,13 @@ class TestOracle(Validator):
     dialect = "oracle"
 
     def test_oracle(self):
+        self.validate_identity("SELECT x FROM t WHERE cond FOR UPDATE")
+        self.validate_identity("SELECT JSON_OBJECT(k1: v1 FORMAT JSON, k2: v2 FORMAT JSON)")
+        self.validate_identity("SELECT JSON_OBJECT('name': first_name || ' ' || last_name) FROM t")
+        self.validate_identity("COALESCE(c1, c2, c3)")
+        self.validate_identity("SELECT * FROM TABLE(foo)")
+        self.validate_identity("SELECT a$x#b")
+        self.validate_identity("SELECT :OBJECT")
         self.validate_identity("SELECT * FROM t FOR UPDATE")
         self.validate_identity("SELECT * FROM t FOR UPDATE WAIT 5")
         self.validate_identity("SELECT * FROM t FOR UPDATE NOWAIT")
@@ -20,14 +28,43 @@ class TestOracle(Validator):
         self.validate_identity("SELECT * FROM table_name SAMPLE (25) s")
         self.validate_identity("SELECT * FROM V$SESSION")
         self.validate_identity(
+            "SELECT JSON_ARRAYAGG(JSON_OBJECT('RNK': RNK, 'RATING_CODE': RATING_CODE, 'DATE_VALUE': DATE_VALUE, 'AGENT_ID': AGENT_ID RETURNING CLOB) RETURNING CLOB) AS JSON_DATA FROM tablename"
+        )
+        self.validate_identity(
+            "SELECT JSON_ARRAY(FOO() FORMAT JSON, BAR() NULL ON NULL RETURNING CLOB STRICT)"
+        )
+        self.validate_identity(
+            "SELECT JSON_ARRAYAGG(FOO() FORMAT JSON ORDER BY bar NULL ON NULL RETURNING CLOB STRICT)"
+        )
+        self.validate_identity(
+            "SELECT COUNT(1) INTO V_Temp FROM TABLE(CAST(somelist AS data_list)) WHERE col LIKE '%contact'"
+        )
+        self.validate_identity(
             "SELECT MIN(column_name) KEEP (DENSE_RANK FIRST ORDER BY column_name DESC) FROM table_name"
+        )
+        self.validate_identity(
+            "SELECT last_name, department_id, salary, MIN(salary) KEEP (DENSE_RANK FIRST ORDER BY commission_pct) "
+            'OVER (PARTITION BY department_id) AS "Worst", MAX(salary) KEEP (DENSE_RANK LAST ORDER BY commission_pct) '
+            'OVER (PARTITION BY department_id) AS "Best" FROM employees ORDER BY department_id, salary, last_name'
+        )
+        self.validate_identity(
+            "SELECT UNIQUE col1, col2 FROM table",
+            "SELECT DISTINCT col1, col2 FROM table",
+        )
+        self.validate_identity(
+            "SELECT * FROM T ORDER BY I OFFSET nvl(:variable1, 10) ROWS FETCH NEXT nvl(:variable2, 10) ROWS ONLY",
+            "SELECT * FROM T ORDER BY I OFFSET COALESCE(:variable1, 10) ROWS FETCH NEXT COALESCE(:variable2, 10) ROWS ONLY",
+        )
+        self.validate_identity(
+            "SELECT * FROM t SAMPLE (.25)",
+            "SELECT * FROM t SAMPLE (0.25)",
         )
 
         self.validate_all(
             "NVL(NULL, 1)",
             write={
                 "": "COALESCE(NULL, 1)",
-                "oracle": "NVL(NULL, 1)",
+                "oracle": "COALESCE(NULL, 1)",
             },
         )
         self.validate_all(
@@ -54,11 +91,30 @@ class TestOracle(Validator):
                 "": "CAST(x AS FLOAT)",
             },
         )
+        self.validate_all(
+            "CAST(x AS sch.udt)",
+            read={
+                "postgres": "CAST(x AS sch.udt)",
+            },
+            write={
+                "oracle": "CAST(x AS sch.udt)",
+                "postgres": "CAST(x AS sch.udt)",
+            },
+        )
 
     def test_join_marker(self):
         self.validate_identity("SELECT e1.x, e2.x FROM e e1, e e2 WHERE e1.y (+) = e2.y")
-        self.validate_identity("SELECT e1.x, e2.x FROM e e1, e e2 WHERE e1.y = e2.y (+)")
-        self.validate_identity("SELECT e1.x, e2.x FROM e e1, e e2 WHERE e1.y (+) = e2.y (+)")
+
+        self.validate_all(
+            "SELECT e1.x, e2.x FROM e e1, e e2 WHERE e1.y = e2.y (+)", write={"": UnsupportedError}
+        )
+        self.validate_all(
+            "SELECT e1.x, e2.x FROM e e1, e e2 WHERE e1.y = e2.y (+)",
+            write={
+                "": "SELECT e1.x, e2.x FROM e AS e1, e AS e2 WHERE e1.y = e2.y",
+                "oracle": "SELECT e1.x, e2.x FROM e e1, e e2 WHERE e1.y = e2.y (+)",
+            },
+        )
 
     def test_hints(self):
         self.validate_identity("SELECT /*+ USE_NL(A B) */ A.COL_TEST FROM TABLE_A A, TABLE_B B")
@@ -163,3 +219,43 @@ MATCH_RECOGNIZE (
 ) MR""",
             pretty=True,
         )
+
+    def test_json_table(self):
+        self.validate_identity(
+            "SELECT * FROM JSON_TABLE(foo FORMAT JSON, 'bla' ERROR ON ERROR NULL ON EMPTY COLUMNS (foo PATH 'bar'))"
+        )
+        self.validate_identity(
+            "SELECT * FROM JSON_TABLE(foo FORMAT JSON, 'bla' ERROR ON ERROR NULL ON EMPTY COLUMNS foo PATH 'bar')",
+            "SELECT * FROM JSON_TABLE(foo FORMAT JSON, 'bla' ERROR ON ERROR NULL ON EMPTY COLUMNS (foo PATH 'bar'))",
+        )
+        self.validate_identity(
+            """SELECT
+  CASE WHEN DBMS_LOB.GETLENGTH(info) < 32000 THEN DBMS_LOB.SUBSTR(info) END AS info_txt,
+  info AS info_clob
+FROM schemaname.tablename ar
+INNER JOIN JSON_TABLE(:emps, '$[*]' COLUMNS (empno NUMBER PATH '$')) jt
+  ON ar.empno = jt.empno""",
+            pretty=True,
+        )
+
+    def test_connect_by(self):
+        start = "START WITH last_name = 'King'"
+        connect = "CONNECT BY PRIOR employee_id = manager_id AND LEVEL <= 4"
+        body = """
+            SELECT last_name "Employee",
+            LEVEL, SYS_CONNECT_BY_PATH(last_name, '/') "Path"
+            FROM employees
+            WHERE level <= 3 AND department_id = 80
+        """
+        pretty = """SELECT
+  last_name AS "Employee",
+  LEVEL,
+  SYS_CONNECT_BY_PATH(last_name, '/') AS "Path"
+FROM employees
+START WITH last_name = 'King'
+CONNECT BY PRIOR employee_id = manager_id AND LEVEL <= 4
+WHERE
+  level <= 3 AND department_id = 80"""
+
+        for query in (f"{body}{start}{connect}", f"{body}{connect}{start}"):
+            self.validate_identity(query, pretty, pretty=True)

@@ -47,6 +47,17 @@ UNMERGABLE_ARGS = set(exp.Select.arg_types) - {
 }
 
 
+# Projections in the outer query that are instances of these types can be replaced
+# without getting wrapped in parentheses, because the precedence won't be altered.
+SAFE_TO_REPLACE_UNWRAPPED = (
+    exp.Column,
+    exp.EQ,
+    exp.Func,
+    exp.NEQ,
+    exp.Paren,
+)
+
+
 def merge_ctes(expression, leave_tables_isolated=False):
     scopes = traverse_scope(expression)
 
@@ -96,6 +107,7 @@ def merge_derived_tables(expression, leave_tables_isolated=False):
                 _merge_order(outer_scope, inner_scope)
                 _merge_hints(outer_scope, inner_scope)
                 outer_scope.clear_cache()
+
     return expression
 
 
@@ -116,7 +128,7 @@ def _mergeable(outer_scope, inner_scope, leave_tables_isolated, from_or_join):
     def _is_a_window_expression_in_unmergable_operation():
         window_expressions = inner_select.find_all(exp.Window)
         window_alias_names = {window.parent.alias_or_name for window in window_expressions}
-        inner_select_name = inner_select.parent.alias_or_name
+        inner_select_name = from_or_join.alias_or_name
         unmergable_window_columns = [
             column
             for column in outer_scope.columns
@@ -155,7 +167,7 @@ def _mergeable(outer_scope, inner_scope, leave_tables_isolated, from_or_join):
         if not inner_from:
             return False
         inner_from_table = inner_from.alias_or_name
-        inner_projections = {s.alias_or_name: s for s in inner_scope.selects}
+        inner_projections = {s.alias_or_name: s for s in inner_scope.expression.selects}
         return any(
             col.table != inner_from_table
             for selection in selections
@@ -164,6 +176,7 @@ def _mergeable(outer_scope, inner_scope, leave_tables_isolated, from_or_join):
 
     return (
         isinstance(outer_scope.expression, exp.Select)
+        and not outer_scope.expression.is_star
         and isinstance(inner_select, exp.Select)
         and not any(inner_select.args.get(arg) for arg in UNMERGABLE_ARGS)
         and inner_select.args.get("from")
@@ -230,6 +243,7 @@ def _merge_from(outer_scope, inner_scope, node_to_replace, alias):
         alias (str)
     """
     new_subquery = inner_scope.expression.args["from"].this
+    new_subquery.set("joins", node_to_replace.args.get("joins"))
     node_to_replace.replace(new_subquery)
     for join_hint in outer_scope.join_hints:
         tables = join_hint.find_all(exp.Table)
@@ -293,8 +307,17 @@ def _merge_expressions(outer_scope, inner_scope, alias):
         if not projection_name:
             continue
         columns_to_replace = outer_columns.get(projection_name, [])
+
+        expression = expression.unalias()
+        must_wrap_expression = not isinstance(expression, SAFE_TO_REPLACE_UNWRAPPED)
+
         for column in columns_to_replace:
-            column.replace(expression.unalias().copy())
+            # Ensures we don't alter the intended operator precedence if there's additional
+            # context surrounding the outer expression (i.e. it's not a simple projection).
+            if isinstance(column.parent, (exp.Unary, exp.Binary)) and must_wrap_expression:
+                expression = exp.paren(expression, copy=False)
+
+            column.replace(expression.copy())
 
 
 def _merge_where(outer_scope, inner_scope, from_or_join):

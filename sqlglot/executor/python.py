@@ -19,7 +19,6 @@ class PythonExecutor:
         self.tables = tables or {}
 
     def execute(self, plan):
-        running = set()
         finished = set()
         queue = set(plan.leaves)
         contexts = {}
@@ -34,7 +33,6 @@ class PythonExecutor:
                         for name, table in contexts[dep].tables.items()
                     }
                 )
-                running.add(node)
 
                 if isinstance(node, planner.Scan):
                     contexts[node] = self.scan(node, context)
@@ -49,11 +47,10 @@ class PythonExecutor:
                 else:
                     raise NotImplementedError
 
-                running.remove(node)
                 finished.add(node)
 
                 for dep in node.dependents:
-                    if dep not in running and all(d in contexts for d in dep.dependencies):
+                    if all(d in contexts for d in dep.dependencies):
                         queue.add(dep)
 
                 for dep in node.dependencies:
@@ -276,11 +273,9 @@ class PythonExecutor:
         end = 1
         length = len(context.table)
         table = self.table(list(step.group) + step.aggregations)
-        condition = self.generate(step.condition)
 
         def add_row():
-            if not condition or context.eval(condition):
-                table.append(group + context.eval_tuple(aggregations))
+            table.append(group + context.eval_tuple(aggregations))
 
         if length:
             for i in range(length):
@@ -304,7 +299,7 @@ class PythonExecutor:
 
         context = self.context({step.name: table, **{name: table for name in context.tables}})
 
-        if step.projections:
+        if step.projections or step.condition:
             return self.scan(step, context)
         return context
 
@@ -420,9 +415,11 @@ class Python(Dialect):
             exp.Column: lambda self, e: f"scope[{self.sql(e, 'table') or None}][{self.sql(e.this)}]",
             exp.Distinct: lambda self, e: f"set({self.sql(e, 'this')})",
             exp.Extract: lambda self, e: f"EXTRACT('{e.name.lower()}', {self.sql(e, 'expression')})",
-            exp.In: lambda self, e: f"{self.sql(e, 'this')} in ({self.expressions(e, flat=True)})",
+            exp.In: lambda self, e: f"{self.sql(e, 'this')} in {{{self.expressions(e, flat=True)}}}",
             exp.Interval: lambda self, e: f"INTERVAL({self.sql(e.this)}, '{self.sql(e.unit)}')",
-            exp.Is: lambda self, e: self.binary(e, "is"),
+            exp.Is: lambda self, e: self.binary(e, "==")
+            if isinstance(e.this, exp.Literal)
+            else self.binary(e, "is"),
             exp.Lambda: _lambda_sql,
             exp.Not: lambda self, e: f"not {self.sql(e.this)}",
             exp.Null: lambda *_: "None",

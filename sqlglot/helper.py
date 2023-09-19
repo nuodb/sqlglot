@@ -33,6 +33,15 @@ class AutoName(Enum):
         return name
 
 
+class classproperty(property):
+    """
+    Similar to a normal property but works for class methods
+    """
+
+    def __get__(self, obj: t.Any, owner: t.Any = None) -> t.Any:
+        return classmethod(self.fget).__get__(None, owner)()  # type: ignore
+
+
 def seq_get(seq: t.Sequence[T], index: int) -> t.Optional[T]:
     """Returns the value in `seq` at position `index`, or `None` if `index` is out of bounds."""
     try:
@@ -137,9 +146,9 @@ def subclasses(
 
 def apply_index_offset(
     this: exp.Expression,
-    expressions: t.List[t.Optional[E]],
+    expressions: t.List[E],
     offset: int,
-) -> t.List[t.Optional[E]]:
+) -> t.List[E]:
     """
     Applies an offset to a given integer literal expression.
 
@@ -170,15 +179,14 @@ def apply_index_offset(
     ):
         return expressions
 
-    if expression:
-        if not expression.type:
-            annotate_types(expression)
-        if t.cast(exp.DataType, expression.type).this in exp.DataType.INTEGER_TYPES:
-            logger.warning("Applying array index offset (%s)", offset)
-            expression = simplify(
-                exp.Add(this=expression.copy(), expression=exp.Literal.number(offset))
-            )
-            return [expression]
+    if not expression.type:
+        annotate_types(expression)
+    if t.cast(exp.DataType, expression.type).this in exp.DataType.INTEGER_TYPES:
+        logger.warning("Applying array index offset (%s)", offset)
+        expression = simplify(
+            exp.Add(this=expression.copy(), expression=exp.Literal.number(offset))
+        )
+        return [expression]
 
     return expressions
 

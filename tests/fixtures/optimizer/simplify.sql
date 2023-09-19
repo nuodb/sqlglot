@@ -240,8 +240,17 @@ A AND B AND C;
 SELECT x WHERE TRUE;
 SELECT x;
 
-SELECT x FROM y LEFT JOIN z ON TRUE;
+SELECT x FROM y JOIN z ON TRUE;
 SELECT x FROM y CROSS JOIN z;
+
+SELECT x FROM y RIGHT JOIN z ON TRUE;
+SELECT x FROM y CROSS JOIN z;
+
+SELECT x FROM y LEFT JOIN z ON TRUE;
+SELECT x FROM y LEFT JOIN z ON TRUE;
+
+SELECT x FROM y FULL OUTER JOIN z ON TRUE;
+SELECT x FROM y FULL OUTER JOIN z ON TRUE;
 
 SELECT x FROM y JOIN z USING (x);
 SELECT x FROM y JOIN z USING (x);
@@ -254,6 +263,9 @@ TRUE;
 
 (FALSE);
 FALSE;
+
+((TRUE));
+TRUE;
 
 (FALSE OR TRUE);
 TRUE;
@@ -278,6 +290,9 @@ x = y AND z;
 
 x * (1 - y);
 x * (1 - y);
+
+(((x % 20) = 0) = TRUE);
+((x % 20) = 0) = TRUE;
 
 --------------------------------------
 -- Literals
@@ -353,6 +368,12 @@ a + 4;
 
 a + (1 + 1) + (10);
 a + 12;
+
+a + (1 * 1) + (1 - (1 * 1));
+a + 1;
+
+a + (b * c) + (d - (e * f));
+a + b * c + (d - e * f);
 
 5 + 4 * 3;
 17;
@@ -596,3 +617,66 @@ TRUE;
 
 x = 2018 OR x <> 2018;
 x <> 2018 OR x = 2018;
+
+t0.x = t1.x AND t0.y < t1.y AND t0.y <= t1.y;
+t0.x = t1.x AND t0.y < t1.y AND t0.y <= t1.y;
+
+--------------------------------------
+-- Coalesce
+--------------------------------------
+COALESCE(x);
+x;
+
+COALESCE(x, 1) = 2;
+x = 2 AND NOT x IS NULL;
+
+2 = COALESCE(x, 1);
+2 = x AND NOT x IS NULL;
+
+COALESCE(x, 1, 1) = 1 + 1;
+x = 2 AND NOT x IS NULL;
+
+COALESCE(x, 1, 2) = 2;
+x = 2 AND NOT x IS NULL;
+
+COALESCE(x, 3) <= 2;
+x <= 2 AND NOT x IS NULL;
+
+COALESCE(x, 1) <> 2;
+x <> 2 OR x IS NULL;
+
+COALESCE(x, 1) <= 2;
+x <= 2 OR x IS NULL;
+
+COALESCE(x, 1) = 1;
+x = 1 OR x IS NULL;
+
+COALESCE(x, 1) IS NULL;
+FALSE;
+
+COALESCE(ROW() OVER (), 1) = 1;
+ROW() OVER () = 1 OR ROW() OVER () IS NULL;
+
+a AND b AND COALESCE(ROW() OVER (), 1) = 1;
+a AND b AND (ROW() OVER () = 1 OR ROW() OVER () IS NULL);
+
+--------------------------------------
+-- CONCAT
+--------------------------------------
+CONCAT(x, y);
+CONCAT(x, y);
+
+CONCAT(x);
+x;
+
+CONCAT('a', 'b', 'c');
+'abc';
+
+CONCAT('a', x, y, 'b', 'c');
+CONCAT('a', x, y, 'bc');
+
+'a' || 'b';
+'ab';
+
+'a' || 'b' || x;
+CONCAT('ab', x);

@@ -178,9 +178,22 @@ FROM (
 ) AS x;
 
 INSERT OVERWRITE TABLE x VALUES (1, 2.0, '3.0'), (4, 5.0, '6.0');
-INSERT OVERWRITE TABLE x VALUES
+INSERT OVERWRITE TABLE x
+VALUES
   (1, 2.0, '3.0'),
   (4, 5.0, '6.0');
+
+INSERT INTO TABLE foo REPLACE WHERE cond SELECT * FROM bar;
+INSERT INTO foo
+REPLACE WHERE cond
+SELECT
+  *
+FROM bar;
+
+INSERT OVERWRITE TABLE zipcodes PARTITION(state = '0') VALUES (896, 'US', 'TAMPA', 33607);
+INSERT OVERWRITE TABLE zipcodes PARTITION(state = '0')
+VALUES
+  (896, 'US', 'TAMPA', 33607);
 
 WITH regional_sales AS (
     SELECT region, SUM(amount) AS total_sales
@@ -333,7 +346,7 @@ SELECT
     fruit,
     basket_index
 FROM table_data
-CROSS JOIN UNNEST(fruit_basket) AS fruit WITH OFFSET basket_index;
+CROSS JOIN UNNEST(fruit_basket) WITH ORDINALITY AS fruit(basket_index);
 WITH table_data AS (
   SELECT
     'bob' AS name,
@@ -344,9 +357,29 @@ SELECT
   fruit,
   basket_index
 FROM table_data
-CROSS JOIN UNNEST(fruit_basket) AS fruit WITH OFFSET AS basket_index;
+CROSS JOIN UNNEST(fruit_basket) WITH ORDINALITY AS fruit(basket_index);
 SELECT A.* EXCEPT A.COL_1, A.COL_2 FROM TABLE_1 A;
 SELECT
   A.*
   EXCEPT (A.COL_1, A.COL_2)
 FROM TABLE_1 AS A;
+
+SELECT *
+FROM a
+JOIN b
+  JOIN c
+    ON b.id = c.id
+  ON a.id = b.id
+CROSS JOIN d
+JOIN e
+  ON d.id = e.id;
+SELECT
+  *
+FROM a
+JOIN b
+  JOIN c
+    ON b.id = c.id
+  ON a.id = b.id
+CROSS JOIN d
+JOIN e
+  ON d.id = e.id;

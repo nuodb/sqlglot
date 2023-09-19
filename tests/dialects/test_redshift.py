@@ -5,11 +5,47 @@ class TestRedshift(Validator):
     dialect = "redshift"
 
     def test_redshift(self):
-        self.validate_identity("SELECT * FROM #x")
-        self.validate_identity("SELECT INTERVAL '5 day'")
-        self.validate_identity("foo$")
-        self.validate_identity("$foo")
+        self.validate_all(
+            "x ~* 'pat'",
+            write={
+                "redshift": "x ~* 'pat'",
+                "snowflake": "REGEXP_LIKE(x, 'pat', 'i')",
+            },
+        )
 
+        self.validate_all(
+            "SELECT CAST('01:03:05.124' AS TIME(2) WITH TIME ZONE)",
+            read={
+                "postgres": "SELECT CAST('01:03:05.124' AS TIMETZ(2))",
+            },
+            write={
+                "postgres": "SELECT CAST('01:03:05.124' AS TIMETZ(2))",
+                "redshift": "SELECT CAST('01:03:05.124' AS TIME(2) WITH TIME ZONE)",
+            },
+        )
+        self.validate_all(
+            "SELECT CAST('2020-02-02 01:03:05.124' AS TIMESTAMP(2) WITH TIME ZONE)",
+            read={
+                "postgres": "SELECT CAST('2020-02-02 01:03:05.124' AS TIMESTAMPTZ(2))",
+            },
+            write={
+                "postgres": "SELECT CAST('2020-02-02 01:03:05.124' AS TIMESTAMPTZ(2))",
+                "redshift": "SELECT CAST('2020-02-02 01:03:05.124' AS TIMESTAMP(2) WITH TIME ZONE)",
+            },
+        )
+        self.validate_all(
+            "SELECT INTERVAL '5 days'",
+            read={
+                "": "SELECT INTERVAL '5' days",
+            },
+        )
+        self.validate_all(
+            "SELECT ADD_MONTHS('2008-03-31', 1)",
+            write={
+                "redshift": "SELECT DATEADD(month, 1, CAST('2008-03-31' AS DATE))",
+                "trino": "SELECT DATE_ADD('month', 1, CAST(CAST('2008-03-31' AS TIMESTAMP) AS DATE))",
+            },
+        )
         self.validate_all(
             "SELECT STRTOL('abc', 16)",
             read={
@@ -81,11 +117,6 @@ class TestRedshift(Validator):
                 "snowflake": "SELECT DATE_PART(month, CAST('20220502' AS DATE))",
             },
         )
-        self.validate_all("SELECT INTERVAL '5 days'", read={"": "SELECT INTERVAL '5' days"})
-        self.validate_all("CONVERT(INTEGER, x)", write={"redshift": "CAST(x AS INTEGER)"})
-        self.validate_all(
-            "DATEADD('day', ndays, caldate)", write={"redshift": "DATEADD(day, ndays, caldate)"}
-        )
         self.validate_all(
             'create table "group" ("col" char(10))',
             write={
@@ -104,7 +135,7 @@ class TestRedshift(Validator):
             "SELECT ST_AsEWKT(ST_GeomFromEWKT('SRID=4326;POINT(10 20)')::geography)",
             write={
                 "redshift": "SELECT ST_ASEWKT(CAST(ST_GEOMFROMEWKT('SRID=4326;POINT(10 20)') AS GEOGRAPHY))",
-                "bigquery": "SELECT ST_ASEWKT(SAFE_CAST(ST_GEOMFROMEWKT('SRID=4326;POINT(10 20)') AS GEOGRAPHY))",
+                "bigquery": "SELECT ST_AsEWKT(CAST(ST_GeomFromEWKT('SRID=4326;POINT(10 20)') AS GEOGRAPHY))",
             },
         )
         self.validate_all(
@@ -140,22 +171,22 @@ class TestRedshift(Validator):
         self.validate_all(
             "SELECT DISTINCT ON (a) a, b FROM x ORDER BY c DESC",
             write={
-                "bigquery": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) WHERE `_row_number` = 1",
-                "databricks": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) WHERE `_row_number` = 1",
-                "drill": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) WHERE `_row_number` = 1",
-                "hive": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) WHERE `_row_number` = 1",
-                "mysql": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC) AS _row_number FROM x) WHERE `_row_number` = 1",
-                "oracle": 'SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) WHERE "_row_number" = 1',
-                "presto": 'SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) WHERE "_row_number" = 1',
-                "redshift": 'SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC) AS _row_number FROM x) WHERE "_row_number" = 1',
-                "snowflake": 'SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC) AS _row_number FROM x) WHERE "_row_number" = 1',
-                "spark": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) WHERE `_row_number` = 1",
-                "sqlite": 'SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) WHERE "_row_number" = 1',
-                "starrocks": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC) AS _row_number FROM x) WHERE `_row_number` = 1",
-                "tableau": 'SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) WHERE "_row_number" = 1',
-                "teradata": 'SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) WHERE "_row_number" = 1',
-                "trino": 'SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) WHERE "_row_number" = 1',
-                "tsql": 'SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) WHERE "_row_number" = 1',
+                "bigquery": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) AS _t WHERE _row_number = 1",
+                "databricks": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) AS _t WHERE _row_number = 1",
+                "drill": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) AS _t WHERE _row_number = 1",
+                "hive": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) AS _t WHERE _row_number = 1",
+                "mysql": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC) AS _row_number FROM x) AS _t WHERE _row_number = 1",
+                "oracle": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) _t WHERE _row_number = 1",
+                "presto": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) AS _t WHERE _row_number = 1",
+                "redshift": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC) AS _row_number FROM x) AS _t WHERE _row_number = 1",
+                "snowflake": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC) AS _row_number FROM x) AS _t WHERE _row_number = 1",
+                "spark": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) AS _t WHERE _row_number = 1",
+                "sqlite": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) AS _t WHERE _row_number = 1",
+                "starrocks": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC) AS _row_number FROM x) AS _t WHERE _row_number = 1",
+                "tableau": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) AS _t WHERE _row_number = 1",
+                "teradata": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) AS _t WHERE _row_number = 1",
+                "trino": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) AS _t WHERE _row_number = 1",
+                "tsql": "SELECT a, b FROM (SELECT a, b, ROW_NUMBER() OVER (PARTITION BY a ORDER BY c DESC NULLS FIRST) AS _row_number FROM x) AS _t WHERE _row_number = 1",
             },
         )
         self.validate_all(
@@ -179,7 +210,7 @@ class TestRedshift(Validator):
         self.validate_all(
             "DATEDIFF('day', a, b)",
             write={
-                "redshift": "DATEDIFF(day, a, b)",
+                "redshift": "DATEDIFF(day, CAST(a AS DATE), CAST(b AS DATE))",
                 "presto": "DATE_DIFF('day', CAST(CAST(a AS TIMESTAMP) AS DATE), CAST(CAST(b AS TIMESTAMP) AS DATE))",
             },
         )
@@ -191,15 +222,18 @@ class TestRedshift(Validator):
         )
 
     def test_identity(self):
+        self.validate_identity("SELECT * FROM #x")
+        self.validate_identity("SELECT INTERVAL '5 day'")
+        self.validate_identity("foo$")
+        self.validate_identity("$foo")
         self.validate_identity("CAST('bla' AS SUPER)")
         self.validate_identity("CREATE TABLE real1 (realcol REAL)")
         self.validate_identity("CAST('foo' AS HLLSKETCH)")
-        self.validate_identity("SELECT DATEADD(day, 1, 'today')")
         self.validate_identity("'abc' SIMILAR TO '(b|c)%'")
+        self.validate_identity("CREATE TABLE datetable (start_date DATE, end_date DATE)")
         self.validate_identity(
             "SELECT caldate + INTERVAL '1 second' AS dateplus FROM date WHERE caldate = '12-31-2008'"
         )
-        self.validate_identity("CREATE TABLE datetable (start_date DATE, end_date DATE)")
         self.validate_identity(
             "SELECT COUNT(*) FROM event WHERE eventname LIKE '%Ring%' OR eventname LIKE '%Die%'"
         )
@@ -218,11 +252,31 @@ class TestRedshift(Validator):
         self.validate_identity(
             "CREATE TABLE SOUP (SOUP1 VARCHAR(50) NOT NULL ENCODE ZSTD, SOUP2 VARCHAR(70) NULL ENCODE DELTA)"
         )
+        self.validate_identity(
+            "SELECT DATEADD(day, 1, 'today')",
+            "SELECT DATEADD(day, 1, CAST('today' AS DATE))",
+        )
+        self.validate_identity(
+            "SELECT DATEADD('day', ndays, caldate)",
+            "SELECT DATEADD(day, ndays, CAST(caldate AS DATE))",
+        )
+        self.validate_identity(
+            "CONVERT(INT, x)",
+            "CAST(x AS INTEGER)",
+        )
+        self.validate_identity(
+            "SELECT DATE_ADD('day', 1, DATE('2023-01-01'))",
+            "SELECT DATEADD(day, 1, CAST(DATE('2023-01-01') AS DATE))",
+        )
 
     def test_values(self):
         self.validate_all(
             "SELECT * FROM (VALUES (1, 2)) AS t",
-            write={"redshift": "SELECT * FROM (SELECT 1, 2) AS t"},
+            write={
+                "redshift": "SELECT * FROM (SELECT 1, 2) AS t",
+                "mysql": "SELECT * FROM (SELECT 1, 2) AS t",
+                "presto": "SELECT * FROM (VALUES (1, 2)) AS t",
+            },
         )
         self.validate_all(
             "SELECT * FROM (VALUES (1)) AS t1(id) CROSS JOIN (VALUES (1)) AS t2(id)",
@@ -304,5 +358,19 @@ class TestRedshift(Validator):
             "CREATE OR REPLACE VIEW v1 AS SELECT cola, colb FROM t1 WITH NO SCHEMA BINDING",
             write={
                 "redshift": "CREATE OR REPLACE VIEW v1 AS SELECT cola, colb FROM t1 WITH NO SCHEMA BINDING",
+            },
+        )
+
+    def test_concat(self):
+        self.validate_all(
+            "SELECT CONCAT('abc', 'def')",
+            write={
+                "redshift": "SELECT COALESCE(CAST('abc' AS VARCHAR(MAX)), '') || COALESCE(CAST('def' AS VARCHAR(MAX)), '')",
+            },
+        )
+        self.validate_all(
+            "SELECT CONCAT_WS('DELIM', 'abc', 'def', 'ghi')",
+            write={
+                "redshift": "SELECT COALESCE(CAST('abc' AS VARCHAR(MAX)), '') || 'DELIM' || COALESCE(CAST('def' AS VARCHAR(MAX)), '') || 'DELIM' || COALESCE(CAST('ghi' AS VARCHAR(MAX)), '')",
             },
         )

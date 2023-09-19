@@ -227,12 +227,48 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(schema.column_names(exp.Table(this="x")), ["foo"])
 
         # Check that the correct dialect is used when calling schema methods
+        # Note: T-SQL is case-insensitive by default, so `fo` in clickhouse will match the normalized table name
         schema = MappingSchema(schema={"[Fo]": {"x": "int"}}, dialect="tsql")
         self.assertEqual(
-            schema.column_names("[Fo]"), schema.column_names("`Fo`", dialect="clickhouse")
+            schema.column_names("[Fo]"), schema.column_names("`fo`", dialect="clickhouse")
         )
 
         # Check that all column identifiers are normalized to lowercase for BigQuery, even quoted
         # ones. Also, ensure that tables aren't normalized, since they're case-sensitive by default.
         schema = MappingSchema(schema={"Foo": {"`BaR`": "int"}}, dialect="bigquery")
         self.assertEqual(schema.column_names("Foo"), ["bar"])
+        self.assertEqual(schema.column_names("foo"), [])
+
+        # Check that the schema's normalization setting can be overridden
+        schema = MappingSchema(schema={"X": {"y": "int"}}, normalize=False, dialect="snowflake")
+        self.assertEqual(schema.column_names("x", normalize=True), ["y"])
+
+    def test_same_number_of_qualifiers(self):
+        schema = MappingSchema({"x": {"y": {"c1": "int"}}})
+
+        with self.assertRaises(SchemaError) as ctx:
+            schema.add_table("z", {"c2": "int"})
+
+        self.assertEqual(
+            str(ctx.exception),
+            "Table z must match the schema's nesting level: 2.",
+        )
+
+        schema = MappingSchema()
+        schema.add_table("x.y", {"c1": "int"})
+
+        with self.assertRaises(SchemaError) as ctx:
+            schema.add_table("z", {"c2": "int"})
+
+        self.assertEqual(
+            str(ctx.exception),
+            "Table z must match the schema's nesting level: 2.",
+        )
+
+        with self.assertRaises(SchemaError) as ctx:
+            MappingSchema({"x": {"y": {"c1": "int"}}, "z": {"c2": "int"}})
+
+        self.assertEqual(
+            str(ctx.exception),
+            "Table z must match the schema's nesting level: 2.",
+        )

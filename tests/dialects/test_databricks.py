@@ -5,11 +5,25 @@ class TestDatabricks(Validator):
     dialect = "databricks"
 
     def test_databricks(self):
+        self.validate_identity("SELECT CAST('11 23:4:0' AS INTERVAL DAY TO HOUR)")
+        self.validate_identity("SELECT CAST('11 23:4:0' AS INTERVAL DAY TO MINUTE)")
+        self.validate_identity("SELECT CAST('11 23:4:0' AS INTERVAL DAY TO SECOND)")
+        self.validate_identity("SELECT CAST('23:00:00' AS INTERVAL HOUR TO MINUTE)")
+        self.validate_identity("SELECT CAST('23:00:00' AS INTERVAL HOUR TO SECOND)")
+        self.validate_identity("SELECT CAST('23:00:00' AS INTERVAL MINUTE TO SECOND)")
+        self.validate_identity("CREATE TABLE target SHALLOW CLONE source")
+        self.validate_identity("INSERT INTO a REPLACE WHERE cond VALUES (1), (2)")
         self.validate_identity("SELECT c1 : price")
         self.validate_identity("CREATE FUNCTION a.b(x INT) RETURNS INT RETURN x + 1")
         self.validate_identity("CREATE FUNCTION a AS b")
         self.validate_identity("SELECT ${x} FROM ${y} WHERE ${z} > 1")
         self.validate_identity("CREATE TABLE foo (x DATE GENERATED ALWAYS AS (CAST(y AS DATE)))")
+        self.validate_identity(
+            "SELECT * FROM sales UNPIVOT INCLUDE NULLS (sales FOR quarter IN (q1 AS `Jan-Mar`))"
+        )
+        self.validate_identity(
+            "SELECT * FROM sales UNPIVOT EXCLUDE NULLS (sales FOR quarter IN (q1 AS `Jan-Mar`))"
+        )
 
         self.validate_all(
             "CREATE TABLE foo (x INT GENERATED ALWAYS AS (YEAR(y)))",

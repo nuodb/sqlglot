@@ -1,6 +1,7 @@
 import unittest
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
+from unittest.mock import patch
 
 import duckdb
 from pandas.testing import assert_frame_equal
@@ -14,6 +15,7 @@ from sqlglot.schema import MappingSchema
 from tests.helpers import (
     TPCDS_SCHEMA,
     TPCH_SCHEMA,
+    assert_logger_contains,
     load_sql_fixture_pairs,
     load_sql_fixtures,
     string_to_bool,
@@ -144,7 +146,8 @@ class TestOptimizer(unittest.TestCase):
                     df2 = self.conn.execute(optimized.sql(pretty=pretty, dialect="duckdb")).df()
                     assert_frame_equal(df1, df2)
 
-    def test_optimize(self):
+    @patch("sqlglot.generator.logger")
+    def test_optimize(self, logger):
         self.assertEqual(optimizer.optimize("x = 1 + 1", identify=None).sql(), "x = 2")
 
         schema = {
@@ -197,7 +200,8 @@ class TestOptimizer(unittest.TestCase):
 
         self.check_file("normalize", normalize)
 
-    def test_qualify_columns(self):
+    @patch("sqlglot.generator.logger")
+    def test_qualify_columns(self, logger):
         self.assertEqual(
             optimizer.qualify_columns.qualify_columns(
                 parse_one("WITH x AS (SELECT a FROM db.y) SELECT z FROM db.x"),
@@ -216,7 +220,32 @@ class TestOptimizer(unittest.TestCase):
             "SELECT y AS y FROM x",
         )
 
-        self.check_file("qualify_columns", qualify_columns, execute=True, schema=self.schema)
+        self.assertEqual(
+            optimizer.qualify.qualify(
+                parse_one(
+                    "WITH X AS (SELECT Y.A FROM DB.y CROSS JOIN a.b.INFORMATION_SCHEMA.COLUMNS) SELECT `A` FROM X",
+                    read="bigquery",
+                ),
+                dialect="bigquery",
+            ).sql(),
+            'WITH "x" AS (SELECT "y"."a" AS "a" FROM "DB"."y" AS "y" CROSS JOIN "a"."b"."INFORMATION_SCHEMA"."COLUMNS" AS "COLUMNS") SELECT "x"."a" AS "a" FROM "x"',
+        )
+
+        self.assertEqual(
+            optimizer.qualify.qualify(
+                parse_one(
+                    "CREATE FUNCTION udfs.`myTest`(`x` FLOAT64) AS (1)",
+                    read="bigquery",
+                ),
+                dialect="bigquery",
+            ).sql(dialect="bigquery"),
+            "CREATE FUNCTION `udfs`.`myTest`(`x` FLOAT64) AS (1)",
+        )
+
+        self.check_file(
+            "qualify_columns", qualify_columns, execute=True, schema=self.schema, set_dialect=True
+        )
+        self.check_file("qualify_columns_ddl", qualify_columns, schema=self.schema)
 
     def test_qualify_columns__with_invisible(self):
         schema = MappingSchema(self.schema, {"x": {"a"}, "y": {"b"}, "z": {"b"}})
@@ -248,6 +277,20 @@ class TestOptimizer(unittest.TestCase):
         self.assertEqual(exp.true(), optimizer.simplify.simplify(expression))
         self.assertEqual(exp.true(), optimizer.simplify.simplify(expression.this))
 
+        # CONCAT in (e.g.) Presto is parsed as Concat instead of SafeConcat which is the default type
+        # This test checks that simplify_concat preserves the corresponding expression types.
+        concat = parse_one("CONCAT('a', x, 'b', 'c')", read="presto")
+        simplified_concat = optimizer.simplify.simplify(concat)
+
+        safe_concat = parse_one("CONCAT('a', x, 'b', 'c')")
+        simplified_safe_concat = optimizer.simplify.simplify(safe_concat)
+
+        self.assertIs(type(simplified_concat), exp.Concat)
+        self.assertIs(type(simplified_safe_concat), exp.SafeConcat)
+
+        self.assertEqual("CONCAT('a', x, 'bc')", simplified_concat.sql(dialect="presto"))
+        self.assertEqual("CONCAT('a', x, 'bc')", simplified_safe_concat.sql())
+
     def test_unnest_subqueries(self):
         self.check_file(
             "unnest_subqueries",
@@ -262,7 +305,7 @@ class TestOptimizer(unittest.TestCase):
         # check order of lateral expansion with no schema
         self.assertEqual(
             optimizer.optimize("SELECT a + 1 AS d, d + 1 AS e FROM x WHERE e > 1 GROUP BY e").sql(),
-            'SELECT "x"."a" + 1 AS "d", "x"."a" + 2 AS "e" FROM "x" AS "x" WHERE "x"."a" + 2 > 1 GROUP BY "x"."a" + 2',
+            'SELECT "x"."a" + 1 AS "d", "x"."a" + 1 + 1 AS "e" FROM "x" AS "x" WHERE ("x"."a" + 2) > 1 GROUP BY "x"."a" + 1 + 1',
         )
 
         self.assertEqual(
@@ -294,7 +337,8 @@ class TestOptimizer(unittest.TestCase):
             pretty=True,
         )
 
-    def test_merge_subqueries(self):
+    @patch("sqlglot.generator.logger")
+    def test_merge_subqueries(self, logger):
         optimize = partial(
             optimizer.optimize,
             rules=[
@@ -398,6 +442,53 @@ FROM READ_CSV('tests/fixtures/optimizer/tpc-h/nation.csv.gz', 'delimiter', '|') 
                 if isinstance(node, exp.Column)
             },
             {"s.b"},
+        )
+
+        # Check that parentheses don't introduce a new scope unless an alias is attached
+        sql = "SELECT * FROM (((SELECT * FROM (t1 JOIN t2) AS t3) JOIN (SELECT * FROM t4)))"
+        expression = parse_one(sql)
+        for scopes in traverse_scope(expression), list(build_scope(expression).traverse()):
+            self.assertEqual(len(scopes), 4)
+
+            self.assertEqual(scopes[0].expression.sql(), "t1, t2")
+            self.assertEqual(set(scopes[0].sources), {"t1", "t2"})
+
+            self.assertEqual(scopes[1].expression.sql(), "SELECT * FROM (t1, t2) AS t3")
+            self.assertEqual(set(scopes[1].sources), {"t3"})
+
+            self.assertEqual(scopes[2].expression.sql(), "SELECT * FROM t4")
+            self.assertEqual(set(scopes[2].sources), {"t4"})
+
+            self.assertEqual(
+                scopes[3].expression.sql(),
+                "SELECT * FROM (((SELECT * FROM (t1, t2) AS t3), (SELECT * FROM t4)))",
+            )
+            self.assertEqual(set(scopes[3].sources), {""})
+
+        inner_query = "SELECT bar FROM baz"
+        for udtf in (f"UNNEST(({inner_query}))", f"LATERAL ({inner_query})"):
+            sql = f"SELECT a FROM foo CROSS JOIN {udtf}"
+            expression = parse_one(sql)
+
+            for scopes in traverse_scope(expression), list(build_scope(expression).traverse()):
+                self.assertEqual(len(scopes), 3)
+
+                self.assertEqual(scopes[0].expression.sql(), inner_query)
+                self.assertEqual(set(scopes[0].sources), {"baz"})
+
+                self.assertEqual(scopes[1].expression.sql(), udtf)
+                self.assertEqual(set(scopes[1].sources), {"", "foo"})  # foo is a lateral source
+
+                self.assertEqual(scopes[2].expression.sql(), f"SELECT a FROM foo CROSS JOIN {udtf}")
+                self.assertEqual(set(scopes[2].sources), {"", "foo"})
+
+    @patch("sqlglot.optimizer.scope.logger")
+    def test_scope_warning(self, logger):
+        self.assertEqual(len(traverse_scope(parse_one("WITH q AS (@y) SELECT * FROM q"))), 1)
+        assert_logger_contains(
+            "Cannot traverse scope %s with type '%s'",
+            logger,
+            level="warning",
         )
 
     def test_literal_type_annotation(self):
@@ -553,7 +644,9 @@ FROM READ_CSV('tests/fixtures/optimizer/tpc-h/nation.csv.gz', 'delimiter', '|') 
 
     def test_function_annotation(self):
         schema = {"x": {"cola": "VARCHAR", "colb": "CHAR"}}
-        sql = "SELECT x.cola || TRIM(x.colb) AS col, DATE(x.colb) FROM x AS x"
+        sql = (
+            "SELECT x.cola || TRIM(x.colb) AS col, DATE(x.colb), DATEFROMPARTS(y, m, d) FROM x AS x"
+        )
 
         expression = annotate_types(parse_one(sql), schema=schema)
         concat_expr_alias = expression.expressions[0]
@@ -566,6 +659,9 @@ FROM READ_CSV('tests/fixtures/optimizer/tpc-h/nation.csv.gz', 'delimiter', '|') 
         self.assertEqual(concat_expr.right.this.type.this, exp.DataType.Type.CHAR)  # x.colb
 
         date_expr = expression.expressions[1]
+        self.assertEqual(date_expr.type.this, exp.DataType.Type.DATE)
+
+        date_expr = expression.expressions[2]
         self.assertEqual(date_expr.type.this, exp.DataType.Type.DATE)
 
         sql = "SELECT CASE WHEN 1=1 THEN x.cola ELSE x.colb END AS col FROM x AS x"
@@ -662,6 +758,42 @@ FROM READ_CSV('tests/fixtures/optimizer/tpc-h/nation.csv.gz', 'delimiter', '|') 
         self.assertEqual(exp.DataType.Type.INT, expression.selects[0].type.this)
         self.assertEqual(exp.DataType.Type.INT, expression.selects[1].type.this)
 
+    def test_nested_type_annotation(self):
+        schema = {"order": {"customer_id": "bigint", "item_id": "bigint", "item_price": "numeric"}}
+        sql = """
+            SELECT ARRAY_AGG(DISTINCT order.item_id) FILTER (WHERE order.item_price > 10) AS items,
+            FROM order AS order
+            GROUP BY order.customer_id
+        """
+        expression = annotate_types(parse_one(sql), schema=schema)
+
+        self.assertEqual(exp.DataType.Type.ARRAY, expression.selects[0].type.this)
+        self.assertEqual(expression.selects[0].type.sql(), "ARRAY<BIGINT>")
+
+        expression = annotate_types(
+            parse_one("SELECT ARRAY_CAT(ARRAY[1,2,3], ARRAY[4,5])", read="postgres")
+        )
+        self.assertEqual(exp.DataType.Type.ARRAY, expression.selects[0].type.this)
+        self.assertEqual(expression.selects[0].type.sql(), "ARRAY<INT>")
+
+    def test_type_annotation_cache(self):
+        sql = "SELECT 1 + 1"
+        expression = annotate_types(parse_one(sql))
+
+        self.assertEqual(exp.DataType.Type.INT, expression.selects[0].type.this)
+
+        expression.selects[0].this.replace(parse_one("1.2"))
+        expression = annotate_types(expression)
+
+        self.assertEqual(exp.DataType.Type.DOUBLE, expression.selects[0].type.this)
+
+    def test_user_defined_type_annotation(self):
+        schema = MappingSchema({"t": {"x": "int"}}, dialect="postgres")
+        expression = annotate_types(parse_one("SELECT CAST(x AS IPADDRESS) FROM t"), schema=schema)
+
+        self.assertEqual(exp.DataType.Type.USERDEFINED, expression.selects[0].type.this)
+        self.assertEqual(expression.selects[0].type.sql(dialect="postgres"), "IPADDRESS")
+
     def test_recursive_cte(self):
         query = parse_one(
             """
@@ -724,6 +856,28 @@ FROM READ_CSV('tests/fixtures/optimizer/tpc-h/nation.csv.gz', 'delimiter', '|') 
         ).sql(pretty=True, dialect="snowflake")
 
         for func in (optimizer.qualify.qualify, optimizer.optimize):
-            source_query = parse_one('SELECT * FROM example."source"', read="snowflake")
+            source_query = parse_one('SELECT * FROM example."source" AS "source"', read="snowflake")
             transformed = func(source_query, dialect="snowflake", schema=schema)
             self.assertEqual(transformed.sql(pretty=True, dialect="snowflake"), expected)
+
+    def test_no_pseudocolumn_expansion(self):
+        schema = {
+            "a": {
+                "a": "text",
+                "b": "text",
+                "_PARTITIONDATE": "date",
+                "_PARTITIONTIME": "timestamp",
+            }
+        }
+
+        self.assertEqual(
+            optimizer.optimize(
+                parse_one("SELECT * FROM a"), schema=MappingSchema(schema, dialect="bigquery")
+            ),
+            parse_one('SELECT "a"."a" AS "a", "a"."b" AS "b" FROM "a" AS "a"'),
+        )
+
+    def test_semistructured(self):
+        query = parse_one("select a.b:c from d", read="snowflake")
+        qualified = optimizer.qualify.qualify(query)
+        self.assertEqual(qualified.expressions[0].alias, "c")

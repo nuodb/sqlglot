@@ -11,6 +11,7 @@ from sqlglot.dialects.dialect import (
     var_map_sql,
 )
 from sqlglot.errors import ParseError
+from sqlglot.helper import seq_get
 from sqlglot.parser import parse_var_map
 from sqlglot.tokens import Token, TokenType
 
@@ -24,6 +25,7 @@ class ClickHouse(Dialect):
     NORMALIZE_FUNCTIONS: bool | str = False
     NULL_ORDERING = "nulls_are_last"
     STRICT_STRING_CONCAT = True
+    SUPPORTS_USER_DEFINED_TYPES = False
 
     class Tokenizer(tokens.Tokenizer):
         COMMENTS = ["--", "#", "#!", ("/*", "*/")]
@@ -37,17 +39,22 @@ class ClickHouse(Dialect):
             "ATTACH": TokenType.COMMAND,
             "DATETIME64": TokenType.DATETIME64,
             "DICTIONARY": TokenType.DICTIONARY,
+            "ENUM": TokenType.ENUM,
+            "ENUM8": TokenType.ENUM8,
+            "ENUM16": TokenType.ENUM16,
             "FINAL": TokenType.FINAL,
+            "FIXEDSTRING": TokenType.FIXEDSTRING,
             "FLOAT32": TokenType.FLOAT,
             "FLOAT64": TokenType.DOUBLE,
             "GLOBAL": TokenType.GLOBAL,
-            "INT128": TokenType.INT128,
             "INT16": TokenType.SMALLINT,
             "INT256": TokenType.INT256,
             "INT32": TokenType.INT,
             "INT64": TokenType.BIGINT,
             "INT8": TokenType.TINYINT,
+            "LOWCARDINALITY": TokenType.LOWCARDINALITY,
             "MAP": TokenType.MAP,
+            "NESTED": TokenType.NESTED,
             "TUPLE": TokenType.STRUCT,
             "UINT128": TokenType.UINT128,
             "UINT16": TokenType.USMALLINT,
@@ -61,9 +68,22 @@ class ClickHouse(Dialect):
         FUNCTIONS = {
             **parser.Parser.FUNCTIONS,
             "ANY": exp.AnyValue.from_arg_list,
+            "DATE_ADD": lambda args: exp.DateAdd(
+                this=seq_get(args, 2), expression=seq_get(args, 1), unit=seq_get(args, 0)
+            ),
+            "DATEADD": lambda args: exp.DateAdd(
+                this=seq_get(args, 2), expression=seq_get(args, 1), unit=seq_get(args, 0)
+            ),
+            "DATE_DIFF": lambda args: exp.DateDiff(
+                this=seq_get(args, 2), expression=seq_get(args, 1), unit=seq_get(args, 0)
+            ),
+            "DATEDIFF": lambda args: exp.DateDiff(
+                this=seq_get(args, 2), expression=seq_get(args, 1), unit=seq_get(args, 0)
+            ),
             "MAP": parse_var_map,
             "MATCH": exp.RegexpLike.from_arg_list,
             "UNIQ": exp.ApproxDistinct.from_arg_list,
+            "XOR": lambda args: exp.Xor(expressions=args),
         }
 
         FUNCTIONS_WITH_ALIASED_ARGS = {*parser.Parser.FUNCTIONS_WITH_ALIASED_ARGS, "TUPLE"}
@@ -76,7 +96,7 @@ class ClickHouse(Dialect):
         FUNCTION_PARSERS.pop("MATCH")
 
         NO_PAREN_FUNCTION_PARSERS = parser.Parser.NO_PAREN_FUNCTION_PARSERS.copy()
-        NO_PAREN_FUNCTION_PARSERS.pop(TokenType.ANY)
+        NO_PAREN_FUNCTION_PARSERS.pop("ANY")
 
         RANGE_PARSERS = {
             **parser.Parser.RANGE_PARSERS,
@@ -93,26 +113,25 @@ class ClickHouse(Dialect):
             *parser.Parser.JOIN_KINDS,
             TokenType.ANY,
             TokenType.ASOF,
-            TokenType.ANTI,
-            TokenType.SEMI,
+            TokenType.ARRAY,
         }
 
-        TABLE_ALIAS_TOKENS = {*parser.Parser.TABLE_ALIAS_TOKENS} - {
+        TABLE_ALIAS_TOKENS = parser.Parser.TABLE_ALIAS_TOKENS - {
             TokenType.ANY,
-            TokenType.SEMI,
-            TokenType.ANTI,
             TokenType.SETTINGS,
             TokenType.FORMAT,
+            TokenType.ARRAY,
         }
 
         LOG_DEFAULTS_TO_LN = True
 
         QUERY_MODIFIER_PARSERS = {
             **parser.Parser.QUERY_MODIFIER_PARSERS,
-            "settings": lambda self: self._parse_csv(self._parse_conjunction)
-            if self._match(TokenType.SETTINGS)
-            else None,
-            "format": lambda self: self._parse_id_var() if self._match(TokenType.FORMAT) else None,
+            TokenType.SETTINGS: lambda self: (
+                "settings",
+                self._advance() or self._parse_csv(self._parse_conjunction),
+            ),
+            TokenType.FORMAT: lambda self: ("format", self._advance() or self._parse_id_var()),
         }
 
         def _parse_conjunction(self) -> t.Optional[exp.Expression]:
@@ -138,7 +157,7 @@ class ClickHouse(Dialect):
 
             this = self._parse_id_var()
             self._match(TokenType.COLON)
-            kind = self._parse_types(check_func=False) or (
+            kind = self._parse_types(check_func=False, allow_identifiers=False) or (
                 self._match_text_seq("IDENTIFIER") and "Identifier"
             )
 
@@ -155,9 +174,15 @@ class ClickHouse(Dialect):
             return this
 
         def _parse_table(
-            self, schema: bool = False, alias_tokens: t.Optional[t.Collection[TokenType]] = None
+            self,
+            schema: bool = False,
+            joins: bool = False,
+            alias_tokens: t.Optional[t.Collection[TokenType]] = None,
+            parse_bracket: bool = False,
         ) -> t.Optional[exp.Expression]:
-            this = super()._parse_table(schema=schema, alias_tokens=alias_tokens)
+            this = super()._parse_table(
+                schema=schema, joins=joins, alias_tokens=alias_tokens, parse_bracket=parse_bracket
+            )
 
             if self._match(TokenType.FINAL):
                 this = self.expression(exp.Final, this=this)
@@ -200,8 +225,10 @@ class ClickHouse(Dialect):
                 self._match_set(self.JOIN_KINDS) and self._prev,
             )
 
-        def _parse_join(self, skip_join_token: bool = False) -> t.Optional[exp.Join]:
-            join = super()._parse_join(skip_join_token)
+        def _parse_join(
+            self, skip_join_token: bool = False, parse_bracket: bool = False
+        ) -> t.Optional[exp.Join]:
+            join = super()._parse_join(skip_join_token=skip_join_token, parse_bracket=True)
 
             if join:
                 join.set("global", join.args.pop("method", None))
@@ -232,7 +259,7 @@ class ClickHouse(Dialect):
 
         def _parse_func_params(
             self, this: t.Optional[exp.Func] = None
-        ) -> t.Optional[t.List[t.Optional[exp.Expression]]]:
+        ) -> t.Optional[t.List[exp.Expression]]:
             if self._match_pair(TokenType.R_PAREN, TokenType.L_PAREN):
                 return self._parse_csv(self._parse_lambda)
 
@@ -250,9 +277,7 @@ class ClickHouse(Dialect):
                 return self.expression(exp.Quantile, this=params[0], quantile=this)
             return self.expression(exp.Quantile, this=this, quantile=exp.Literal.number(0.5))
 
-        def _parse_wrapped_id_vars(
-            self, optional: bool = False
-        ) -> t.List[t.Optional[exp.Expression]]:
+        def _parse_wrapped_id_vars(self, optional: bool = False) -> t.List[exp.Expression]:
             return super()._parse_wrapped_id_vars(optional=True)
 
         def _parse_primary_key(
@@ -273,19 +298,42 @@ class ClickHouse(Dialect):
             return None
 
     class Generator(generator.Generator):
+        QUERY_HINTS = False
         STRUCT_DELIMITER = ("(", ")")
+        NVL2_SUPPORTED = False
+
+        STRING_TYPE_MAPPING = {
+            exp.DataType.Type.CHAR: "String",
+            exp.DataType.Type.LONGBLOB: "String",
+            exp.DataType.Type.LONGTEXT: "String",
+            exp.DataType.Type.MEDIUMBLOB: "String",
+            exp.DataType.Type.MEDIUMTEXT: "String",
+            exp.DataType.Type.TINYBLOB: "String",
+            exp.DataType.Type.TINYTEXT: "String",
+            exp.DataType.Type.TEXT: "String",
+            exp.DataType.Type.VARBINARY: "String",
+            exp.DataType.Type.VARCHAR: "String",
+        }
 
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
+            **STRING_TYPE_MAPPING,
             exp.DataType.Type.ARRAY: "Array",
             exp.DataType.Type.BIGINT: "Int64",
             exp.DataType.Type.DATETIME64: "DateTime64",
             exp.DataType.Type.DOUBLE: "Float64",
+            exp.DataType.Type.ENUM: "Enum",
+            exp.DataType.Type.ENUM8: "Enum8",
+            exp.DataType.Type.ENUM16: "Enum16",
+            exp.DataType.Type.FIXEDSTRING: "FixedString",
             exp.DataType.Type.FLOAT: "Float32",
             exp.DataType.Type.INT: "Int32",
+            exp.DataType.Type.MEDIUMINT: "Int32",
             exp.DataType.Type.INT128: "Int128",
             exp.DataType.Type.INT256: "Int256",
+            exp.DataType.Type.LOWCARDINALITY: "LowCardinality",
             exp.DataType.Type.MAP: "Map",
+            exp.DataType.Type.NESTED: "Nested",
             exp.DataType.Type.NULLABLE: "Nullable",
             exp.DataType.Type.SMALLINT: "Int16",
             exp.DataType.Type.STRUCT: "Tuple",
@@ -304,6 +352,12 @@ class ClickHouse(Dialect):
             exp.ApproxDistinct: rename_func("uniq"),
             exp.Array: inline_array_sql,
             exp.CastToStrType: rename_func("CAST"),
+            exp.DateAdd: lambda self, e: self.func(
+                "DATE_ADD", exp.Literal.string(e.text("unit") or "day"), e.expression, e.this
+            ),
+            exp.DateDiff: lambda self, e: self.func(
+                "DATE_DIFF", exp.Literal.string(e.text("unit") or "day"), e.expression, e.this
+            ),
             exp.Final: lambda self, e: f"{self.sql(e, 'this')} FINAL",
             exp.Map: lambda self, e: _lower_func(var_map_sql(self, e)),
             exp.PartitionedByProperty: lambda self, e: f"PARTITION BY {self.sql(e, 'this')}",
@@ -313,6 +367,7 @@ class ClickHouse(Dialect):
             exp.RegexpLike: lambda self, e: f"match({self.format_args(e.this, e.expression)})",
             exp.StrPosition: lambda self, e: f"position({self.format_args(e.this, e.args.get('substr'), e.args.get('position'))})",
             exp.VarMap: lambda self, e: _lower_func(var_map_sql(self, e)),
+            exp.Xor: lambda self, e: self.func("xor", e.this, e.expression, *e.expressions),
         }
 
         PROPERTIES_LOCATION = {
@@ -339,8 +394,19 @@ class ClickHouse(Dialect):
             "NAMED COLLECTION",
         }
 
+        def datatype_sql(self, expression: exp.DataType) -> str:
+            # String is the standard ClickHouse type, every other variant is just an alias.
+            # Additionally, any supplied length parameter will be ignored.
+            #
+            # https://clickhouse.com/docs/en/sql-reference/data-types/string
+            if expression.this in self.STRING_TYPE_MAPPING:
+                return "String"
+
+            return super().datatype_sql(expression)
+
         def safeconcat_sql(self, expression: exp.SafeConcat) -> str:
             # Clickhouse errors out if we try to cast a NULL value to TEXT
+            expression = expression.copy()
             return self.func(
                 "CONCAT",
                 *[
@@ -366,7 +432,7 @@ class ClickHouse(Dialect):
             ]
 
         def parameterizedagg_sql(self, expression: exp.Anonymous) -> str:
-            params = self.expressions(expression, "params", flat=True)
+            params = self.expressions(expression, key="params", flat=True)
             return self.func(expression.name, *expression.expressions) + f"({params})"
 
         def placeholder_sql(self, expression: exp.Placeholder) -> str:
@@ -375,11 +441,7 @@ class ClickHouse(Dialect):
         def oncluster_sql(self, expression: exp.OnCluster) -> str:
             return f"ON CLUSTER {self.sql(expression, 'this')}"
 
-        def createable_sql(
-            self,
-            expression: exp.Create,
-            locations: dict[exp.Properties.Location, list[exp.Property]],
-        ) -> str:
+        def createable_sql(self, expression: exp.Create, locations: t.DefaultDict) -> str:
             kind = self.sql(expression, "kind").upper()
             if kind in self.ON_CLUSTER_TARGETS and locations.get(exp.Properties.Location.POST_NAME):
                 this_name = self.sql(expression.this, "this")
@@ -388,4 +450,5 @@ class ClickHouse(Dialect):
                 )
                 this_schema = self.schema_columns_sql(expression.this)
                 return f"{this_name}{self.sep()}{this_properties}{self.sep()}{this_schema}"
+
             return super().createable_sql(expression, locations)

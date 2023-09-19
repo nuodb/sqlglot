@@ -16,18 +16,16 @@ from sqlglot.dialects.dialect import (
 )
 
 
-def _date_add_sql(kind: str) -> t.Callable[[generator.Generator, exp.DateAdd | exp.DateSub], str]:
-    def func(self: generator.Generator, expression: exp.DateAdd | exp.DateSub) -> str:
+def _date_add_sql(kind: str) -> t.Callable[[Drill.Generator, exp.DateAdd | exp.DateSub], str]:
+    def func(self: Drill.Generator, expression: exp.DateAdd | exp.DateSub) -> str:
         this = self.sql(expression, "this")
         unit = exp.var(expression.text("unit").upper() or "DAY")
-        return (
-            f"DATE_{kind}({this}, {self.sql(exp.Interval(this=expression.expression, unit=unit))})"
-        )
+        return f"DATE_{kind}({this}, {self.sql(exp.Interval(this=expression.expression.copy(), unit=unit))})"
 
     return func
 
 
-def _str_to_date(self: generator.Generator, expression: exp.StrToDate) -> str:
+def _str_to_date(self: Drill.Generator, expression: exp.StrToDate) -> str:
     this = self.sql(expression, "this")
     time_format = self.format_time(expression)
     if time_format == Drill.DATE_FORMAT:
@@ -41,6 +39,8 @@ class Drill(Dialect):
     DATE_FORMAT = "'yyyy-MM-dd'"
     DATEINT_FORMAT = "'yyyyMMdd'"
     TIME_FORMAT = "'yyyy-MM-dd HH:mm:ss'"
+    SUPPORTS_USER_DEFINED_TYPES = False
+    SUPPORTS_SEMI_ANTI_JOIN = False
 
     TIME_MAPPING = {
         "y": "%Y",
@@ -75,7 +75,6 @@ class Drill(Dialect):
     }
 
     class Tokenizer(tokens.Tokenizer):
-        QUOTES = ["'"]
         IDENTIFIERS = ["`"]
         STRING_ESCAPES = ["\\"]
         ENCODE = "utf-8"
@@ -96,6 +95,8 @@ class Drill(Dialect):
     class Generator(generator.Generator):
         JOIN_HINTS = False
         TABLE_HINTS = False
+        QUERY_HINTS = False
+        NVL2_SUPPORTED = False
 
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
@@ -135,7 +136,9 @@ class Drill(Dialect):
             exp.StrPosition: str_position_sql,
             exp.StrToDate: _str_to_date,
             exp.Pow: rename_func("POW"),
-            exp.Select: transforms.preprocess([transforms.eliminate_distinct_on]),
+            exp.Select: transforms.preprocess(
+                [transforms.eliminate_distinct_on, transforms.eliminate_semi_and_anti_joins]
+            ),
             exp.StrToTime: lambda self, e: f"TO_TIMESTAMP({self.sql(e, 'this')}, {self.format_time(e)})",
             exp.TimeStrToDate: lambda self, e: f"CAST({self.sql(e, 'this')} AS DATE)",
             exp.TimeStrToTime: timestrtotime_sql,
@@ -144,7 +147,7 @@ class Drill(Dialect):
             exp.TimeToUnix: rename_func("UNIX_TIMESTAMP"),
             exp.ToChar: lambda self, e: self.function_fallback_sql(e),
             exp.TryCast: no_trycast_sql,
-            exp.TsOrDsAdd: lambda self, e: f"DATE_ADD(CAST({self.sql(e, 'this')} AS DATE), {self.sql(exp.Interval(this=e.expression, unit=exp.var('DAY')))})",
+            exp.TsOrDsAdd: lambda self, e: f"DATE_ADD(CAST({self.sql(e, 'this')} AS DATE), {self.sql(exp.Interval(this=e.expression.copy(), unit=exp.var('DAY')))})",
             exp.TsOrDsToDate: ts_or_ds_to_date_sql("drill"),
             exp.TsOrDiToDi: lambda self, e: f"CAST(SUBSTR(REPLACE(CAST({self.sql(e, 'this')} AS VARCHAR), '-', ''), 1, 8) AS INT)",
         }

@@ -23,9 +23,11 @@ class Plan:
             while nodes:
                 node = nodes.pop()
                 dag[node] = set()
+
                 for dep in node.dependencies:
                     dag[node].add(dep)
                     nodes.add(dep)
+
             self._dag = dag
 
         return self._dag
@@ -91,6 +93,7 @@ class Step:
             A Step DAG corresponding to `expression`.
         """
         ctes = ctes or {}
+        expression = expression.unnest()
         with_ = expression.args.get("with")
 
         # CTEs break the mold of scope and introduce themselves to all in the context.
@@ -120,22 +123,32 @@ class Step:
 
         projections = []  # final selects in this chain of steps representing a select
         operands = {}  # intermediate computations of agg funcs eg x + 1 in SUM(x + 1)
-        aggregations = []
+        aggregations = set()
         next_operand_name = name_sequence("_a_")
 
         def extract_agg_operands(expression):
-            for agg in expression.find_all(exp.AggFunc):
+            agg_funcs = tuple(expression.find_all(exp.AggFunc))
+            if agg_funcs:
+                aggregations.add(expression)
+
+            for agg in agg_funcs:
                 for operand in agg.unnest_operands():
                     if isinstance(operand, exp.Column):
                         continue
                     if operand not in operands:
                         operands[operand] = next_operand_name()
+
                     operand.replace(exp.column(operands[operand], quoted=True))
+
+            return bool(agg_funcs)
+
+        def set_ops_and_aggs(step):
+            step.operands = tuple(alias(operand, alias_) for operand, alias_ in operands.items())
+            step.aggregations = list(aggregations)
 
         for e in expression.expressions:
             if e.find(exp.AggFunc):
                 projections.append(exp.column(e.alias_or_name, step.name, quoted=True))
-                aggregations.append(e)
                 extract_agg_operands(e)
             else:
                 projections.append(e)
@@ -155,28 +168,49 @@ class Step:
             having = expression.args.get("having")
 
             if having:
-                extract_agg_operands(having)
-                aggregate.condition = having.this
+                if extract_agg_operands(exp.alias_(having.this, "_h", quoted=True)):
+                    aggregate.condition = exp.column("_h", step.name, quoted=True)
+                else:
+                    aggregate.condition = having.this
 
-            aggregate.operands = tuple(
-                alias(operand, alias_) for operand, alias_ in operands.items()
-            )
-            aggregate.aggregations = aggregations
+            set_ops_and_aggs(aggregate)
+
             # give aggregates names and replace projections with references to them
             aggregate.group = {
                 f"_g{i}": e for i, e in enumerate(group.expressions if group else [])
             }
+
+            intermediate: t.Dict[str | exp.Expression, str] = {}
+            for k, v in aggregate.group.items():
+                intermediate[v] = k
+                if isinstance(v, exp.Column):
+                    intermediate[v.name] = k
+
             for projection in projections:
-                for i, e in aggregate.group.items():
-                    for child, *_ in projection.walk():
-                        if child == e:
-                            child.replace(exp.column(i, step.name))
+                for node, *_ in projection.walk():
+                    name = intermediate.get(node)
+                    if name:
+                        node.replace(exp.column(name, step.name))
+
+            if aggregate.condition:
+                for node, *_ in aggregate.condition.walk():
+                    name = intermediate.get(node) or intermediate.get(node.name)
+                    if name:
+                        node.replace(exp.column(name, step.name))
+
             aggregate.add_dependency(step)
             step = aggregate
 
         order = expression.args.get("order")
 
         if order:
+            if isinstance(step, Aggregate):
+                for i, ordered in enumerate(order.expressions):
+                    if extract_agg_operands(exp.alias_(ordered.this, f"_o_{i}", quoted=True)):
+                        ordered.this.replace(exp.column(f"_o_{i}", step.name, quoted=True))
+
+                set_ops_and_aggs(aggregate)
+
             sort = Sort()
             sort.name = step.name
             sort.key = order.expressions
@@ -320,7 +354,10 @@ class Join(Step):
     def _to_s(self, indent: str) -> t.List[str]:
         lines = []
         for name, join in self.joins.items():
-            lines.append(f"{indent}{name}: {join['side']}")
+            lines.append(f"{indent}{name}: {join['side'] or 'INNER'}")
+            join_key = ", ".join(str(key) for key in t.cast(list, join.get("join_key") or []))
+            if join_key:
+                lines.append(f"{indent}Key: {join_key}")
             if join.get("condition"):
                 lines.append(f"{indent}On: {join['condition'].sql()}")  # type: ignore
         return lines

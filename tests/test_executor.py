@@ -58,8 +58,11 @@ class TestExecutor(unittest.TestCase):
                 source.rename(columns={column: target.columns[i]}, inplace=True)
 
     def test_py_dialect(self):
-        self.assertEqual(Python().generate(parse_one("'x '''")), r"'x \''")
-        self.assertEqual(Python().generate(parse_one("MAP([1], [2])")), "MAP([1], [2])")
+        generate = Python().generate
+        self.assertEqual(generate(parse_one("'x '''")), r"'x \''")
+        self.assertEqual(generate(parse_one("MAP([1], [2])")), "MAP([1], [2])")
+        self.assertEqual(generate(parse_one("1 is null")), "1 == None")
+        self.assertEqual(generate(parse_one("x is null")), "scope[None][x] is None")
 
     def test_optimized_tpch(self):
         for i, (sql, optimized) in enumerate(self.sqls[:20], start=1):
@@ -250,6 +253,11 @@ class TestExecutor(unittest.TestCase):
             ),
             (
                 "SELECT a FROM x EXCEPT SELECT a FROM y",
+                ["a"],
+                [("a",)],
+            ),
+            (
+                "(SELECT a FROM x) EXCEPT (SELECT a FROM y)",
                 ["a"],
                 [("a",)],
             ),
@@ -580,6 +588,7 @@ class TestExecutor(unittest.TestCase):
             ("INTERVAL '1' week", datetime.timedelta(weeks=1)),
             ("1 IN (1, 2, 3)", True),
             ("1 IN (2, 3)", False),
+            ("1 IN (1)", True),
             ("NULL IS NULL", True),
             ("NULL IS NOT NULL", False),
             ("NULL = NULL", None),
@@ -612,6 +621,9 @@ class TestExecutor(unittest.TestCase):
             ("STRFTIME('%j', NULL)", None),
             ("DATESTRTODATE('2022-01-01')", date(2022, 1, 1)),
             ("TIMESTRTOTIME('2022-01-01')", datetime.datetime(2022, 1, 1)),
+            ("LEFT('12345', 3)", "123"),
+            ("RIGHT('12345', 3)", "345"),
+            ("DATEDIFF('2022-01-03'::date, '2022-01-01'::TIMESTAMP::DATE)", 2),
         ]:
             with self.subTest(sql):
                 result = execute(f"SELECT {sql}")
@@ -643,3 +655,92 @@ class TestExecutor(unittest.TestCase):
 
         self.assertEqual(result.columns, ("id", "price"))
         self.assertEqual(result.rows, [(1, 1.0), (2, 2.0), (3, 3.0)])
+
+    def test_group_by(self):
+        tables = {
+            "x": [
+                {"a": 1, "b": 10},
+                {"a": 2, "b": 20},
+                {"a": 3, "b": 28},
+                {"a": 2, "b": 25},
+                {"a": 1, "b": 40},
+            ],
+        }
+
+        for sql, expected, columns in (
+            (
+                "SELECT a, AVG(b) FROM x GROUP BY a ORDER BY AVG(b)",
+                [(2, 22.5), (1, 25.0), (3, 28.0)],
+                ("a", "_col_1"),
+            ),
+            (
+                "SELECT a, AVG(b) FROM x GROUP BY a having avg(b) > 23",
+                [(1, 25.0), (3, 28.0)],
+                ("a", "_col_1"),
+            ),
+            (
+                "SELECT a, AVG(b) FROM x GROUP BY a having avg(b + 1) > 23",
+                [(1, 25.0), (2, 22.5), (3, 28.0)],
+                ("a", "_col_1"),
+            ),
+            (
+                "SELECT a, AVG(b) FROM x GROUP BY a having sum(b) + 5 > 50",
+                [(1, 25.0)],
+                ("a", "_col_1"),
+            ),
+            (
+                "SELECT a + 1 AS a, AVG(b + 1) FROM x GROUP BY a + 1 having AVG(b + 1) > 26",
+                [(4, 29.0)],
+                ("a", "_col_1"),
+            ),
+            (
+                "SELECT a, avg(b) FROM x GROUP BY a HAVING a = 1",
+                [(1, 25.0)],
+                ("a", "_col_1"),
+            ),
+            (
+                "SELECT a + 1, avg(b) FROM x GROUP BY a + 1 HAVING a + 1 = 2",
+                [(2, 25.0)],
+                ("_col_0", "_col_1"),
+            ),
+            (
+                "SELECT a FROM x GROUP BY a ORDER BY AVG(b)",
+                [(2,), (1,), (3,)],
+                ("a",),
+            ),
+            (
+                "SELECT a, SUM(b) FROM x GROUP BY a ORDER BY COUNT(*)",
+                [(3, 28), (1, 50), (2, 45)],
+                ("a", "_col_1"),
+            ),
+            (
+                "SELECT a, SUM(b) FROM x GROUP BY a ORDER BY COUNT(*) DESC",
+                [(1, 50), (2, 45), (3, 28)],
+                ("a", "_col_1"),
+            ),
+        ):
+            with self.subTest(sql):
+                result = execute(sql, tables=tables)
+                self.assertEqual(result.columns, columns)
+                self.assertEqual(result.rows, expected)
+
+    def test_dict_values(self):
+        tables = {
+            "foo": [{"raw": {"name": "Hello, World"}}],
+        }
+        result = execute("SELECT raw:name AS name FROM foo", read="snowflake", tables=tables)
+
+        self.assertEqual(result.columns, ("NAME",))
+        self.assertEqual(result.rows, [("Hello, World",)])
+
+        tables = {
+            '"ITEM"': [
+                {"id": 1, "attributes": {"flavor": "cherry", "taste": "sweet"}},
+                {"id": 2, "attributes": {"flavor": "lime", "taste": "sour"}},
+                {"id": 3, "attributes": {"flavor": "apple", "taste": None}},
+            ]
+        }
+        result = execute("SELECT i.attributes.flavor FROM `ITEM` i", read="bigquery", tables=tables)
+
+        self.assertEqual(result.columns, ("flavor",))
+        self.assertEqual(result.rows, [("cherry",), ("lime",), ("apple",)])

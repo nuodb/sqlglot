@@ -4,6 +4,24 @@ from tests.dialects.test_dialect import Validator
 class TestTeradata(Validator):
     dialect = "teradata"
 
+    def test_teradata(self):
+        self.validate_identity("SELECT * FROM tbl SAMPLE 5")
+        self.validate_identity(
+            "SELECT * FROM tbl SAMPLE 0.33, .25, .1",
+            "SELECT * FROM tbl SAMPLE 0.33, 0.25, 0.1",
+        )
+
+        self.validate_all(
+            "DATABASE tduser",
+            read={
+                "databricks": "USE tduser",
+            },
+            write={
+                "databricks": "USE tduser",
+                "teradata": "DATABASE tduser",
+            },
+        )
+
     def test_translate(self):
         self.validate_all(
             "TRANSLATE(x USING LATIN_TO_UNICODE)",
@@ -21,6 +39,13 @@ class TestTeradata(Validator):
                 "mysql": "UPDATE A SET col2 = '' FROM schema.tableA AS A, (SELECT col1 FROM schema.tableA GROUP BY col1) AS B WHERE A.col1 = B.col1",
             },
         )
+
+    def test_statistics(self):
+        self.validate_identity("COLLECT STATISTICS ON tbl INDEX(col)")
+        self.validate_identity("COLLECT STATS ON tbl COLUMNS(col)")
+        self.validate_identity("COLLECT STATS COLUMNS(col) ON tbl")
+        self.validate_identity("HELP STATISTICS personel.employee")
+        self.validate_identity("HELP STATISTICS personnel.employee FROM my_qcd")
 
     def test_create(self):
         self.validate_identity("CREATE TABLE x (y INT) PRIMARY INDEX (y) PARTITION BY y INDEX (y)")
@@ -60,6 +85,9 @@ class TestTeradata(Validator):
         )
         self.validate_identity(
             "CREATE VOLATILE MULTISET TABLE a, NOT LOCAL AFTER JOURNAL, FREESPACE=1 PERCENT, DATABLOCKSIZE=10 BYTES, WITH NO CONCURRENT ISOLATED LOADING FOR ALL (a INT)"
+        )
+        self.validate_identity(
+            "CREATE VOLATILE SET TABLE example1 AS (SELECT col1, col2, col3 FROM table1) WITH DATA PRIMARY INDEX (col1) ON COMMIT PRESERVE ROWS"
         )
 
         self.validate_all(

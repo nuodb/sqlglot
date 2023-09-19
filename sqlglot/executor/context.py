@@ -41,11 +41,13 @@ class Context:
     def table(self) -> Table:
         if self._table is None:
             self._table = list(self.tables.values())[0]
+
             for other in self.tables.values():
                 if self._table.columns != other.columns:
                     raise Exception(f"Columns are different.")
                 if len(self._table.rows) != len(other.rows):
                     raise Exception(f"Rows are different.")
+
         return self._table
 
     def add_columns(self, *columns: str) -> None:
@@ -63,11 +65,9 @@ class Context:
                 reader = table[i]
             yield reader, self
 
-    def table_iter(self, table: str) -> t.Iterator[t.Tuple[TableIter, Context]]:
+    def table_iter(self, table: str) -> TableIter:
         self.env["scope"] = self.row_readers
-
-        for reader in self.tables[table]:
-            yield reader, self
+        return iter(self.tables[table])
 
     def filter(self, condition) -> None:
         rows = [reader.row for reader, _ in self if self.eval(condition)]

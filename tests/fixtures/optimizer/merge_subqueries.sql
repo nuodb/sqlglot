@@ -2,6 +2,28 @@
 SELECT a, b FROM (SELECT a, b FROM x);
 SELECT x.a AS a, x.b AS b FROM x AS x;
 
+# title: Wrap addition in a multiplication
+SELECT c * 2 AS d FROM (SELECT a + b AS c FROM x);
+SELECT (x.a + x.b) * 2 AS d FROM x AS x;
+
+# title: Wrap addition in an addition
+# note: The "simplify" rule will unwrap this
+SELECT c + d AS e FROM (SELECT a + b AS c, a AS d FROM x);
+SELECT (x.a + x.b) + x.a AS e FROM x AS x;
+
+# title: Wrap multiplication in an addition
+# note: The "simplify" rule will unwrap this
+WITH cte AS (SELECT a * b AS c, a AS d FROM x) SELECT c + d AS e FROM cte;
+SELECT (x.a * x.b) + x.a AS e FROM x AS x;
+
+# title: Don't wrap function
+SELECT 2 * foo AS bar FROM (SELECT CAST(b AS DOUBLE) AS foo FROM x);
+SELECT 2 * CAST(x.b AS DOUBLE) AS bar FROM x AS x;
+
+# title: Don't wrap a wrapped expression
+SELECT foo * 2 AS bar FROM (SELECT (1 + 2 + 3) AS foo FROM x);
+SELECT (1 + 2 + 3) * 2 AS bar FROM x AS x;
+
 # title: Inner table alias is merged
 SELECT a, b FROM (SELECT a, b FROM x AS q) AS r;
 SELECT q.a AS a, q.b AS b FROM x AS q;
@@ -252,7 +274,7 @@ FROM
   t1
 GROUP BY t1.row_num
 ORDER BY t1.row_num;
-WITH t1 AS (SELECT x.a AS a, x.b AS b, ROW_NUMBER() OVER (PARTITION BY x.a ORDER BY x.a) AS row_num FROM x AS x) SELECT t1.row_num AS row_num, SUM(t1.a) AS total FROM t1 GROUP BY t1.row_num ORDER BY t1.row_num;
+WITH t1 AS (SELECT x.a AS a, x.b AS b, ROW_NUMBER() OVER (PARTITION BY x.a ORDER BY x.a) AS row_num FROM x AS x) SELECT t1.row_num AS row_num, SUM(t1.a) AS total FROM t1 GROUP BY t1.row_num ORDER BY row_num;
 
 # title: Test prevent merging of window if in order by func
 with t1 as (
@@ -287,6 +309,21 @@ SELECT
 FROM
   t1;
 SELECT x.a AS a, x.b AS b, ROW_NUMBER() OVER (PARTITION BY x.a ORDER BY x.a) AS row_num FROM x AS x;
+
+# title: Don't merge window functions, inner table is aliased in outer query
+with t1 as (
+  SELECT
+    ROW_NUMBER() OVER (PARTITION BY x.a ORDER BY x.a) as row_num
+  FROM
+    x
+)
+SELECT
+  t2.row_num
+FROM
+  t1 AS t2
+WHERE
+  t2.row_num = 2;
+WITH t1 AS (SELECT ROW_NUMBER() OVER (PARTITION BY x.a ORDER BY x.a) AS row_num FROM x AS x) SELECT t2.row_num AS row_num FROM t1 AS t2 WHERE t2.row_num = 2;
 
 # title: Values Test
 # dialect: spark
@@ -350,3 +387,27 @@ FROM x AS x
 LEFT JOIN i AS i
   ON x.a = i.a;
 WITH i AS (SELECT x.a AS a FROM y AS y JOIN x AS x ON y.b = x.b) SELECT x.a AS a FROM x AS x LEFT JOIN i AS i ON x.a = i.a;
+
+# title: Outer scope selects from wrapped table with a join (unknown schema)
+# execute: false
+WITH _q_0 AS (SELECT t1.c AS c FROM t1 AS t1) SELECT * FROM (_q_0 AS _q_0 CROSS JOIN t2 AS t2);
+WITH _q_0 AS (SELECT t1.c AS c FROM t1 AS t1) SELECT * FROM (_q_0 AS _q_0 CROSS JOIN t2 AS t2);
+
+# title: Outer scope selects single column from wrapped table with a join
+WITH _q_0 AS (
+  SELECT
+    x.a AS a
+  FROM x AS x
+), y_2 AS (
+  SELECT
+    y.b AS b
+  FROM y AS y
+)
+SELECT
+  y.b AS b
+FROM (
+  _q_0 AS _q_0
+    JOIN y_2 AS y
+      ON _q_0.a = y.b
+);
+SELECT y.b AS b FROM (x AS x JOIN y AS y ON x.a = y.b);

@@ -2,7 +2,7 @@ import datetime
 import math
 import unittest
 
-from sqlglot import alias, exp, parse_one
+from sqlglot import ParseError, alias, exp, parse_one
 
 
 class TestExpressions(unittest.TestCase):
@@ -15,14 +15,14 @@ class TestExpressions(unittest.TestCase):
         self.assertEqual(parse_one("x(1)").find(exp.Literal).depth, 1)
 
     def test_eq(self):
-        self.assertEqual(exp.to_identifier("a"), exp.to_identifier("A"))
+        self.assertNotEqual(exp.to_identifier("a"), exp.to_identifier("A"))
 
         self.assertEqual(
             exp.Column(table=exp.to_identifier("b"), this=exp.to_identifier("b")),
             exp.Column(this=exp.to_identifier("b"), table=exp.to_identifier("b")),
         )
 
-        self.assertEqual(exp.to_identifier("a", quoted=True), exp.to_identifier("A"))
+        self.assertNotEqual(exp.to_identifier("a", quoted=True), exp.to_identifier("A"))
         self.assertNotEqual(exp.to_identifier("A", quoted=True), exp.to_identifier("A"))
         self.assertNotEqual(
             exp.to_identifier("A", quoted=True), exp.to_identifier("a", quoted=True)
@@ -31,9 +31,9 @@ class TestExpressions(unittest.TestCase):
         self.assertNotEqual(parse_one("'1'"), parse_one("1"))
         self.assertEqual(parse_one("`a`", read="hive"), parse_one('"a"'))
         self.assertEqual(parse_one("`a`", read="hive"), parse_one('"a"  '))
-        self.assertEqual(parse_one("`a`.b", read="hive"), parse_one('"a"."b"'))
+        self.assertEqual(parse_one("`a`.`b`", read="hive"), parse_one('"a"."b"'))
         self.assertEqual(parse_one("select a, b+1"), parse_one("SELECT a, b + 1"))
-        self.assertEqual(parse_one("`a`.`b`.`c`", read="hive"), parse_one("a.b.c"))
+        self.assertNotEqual(parse_one("`a`.`b`.`c`", read="hive"), parse_one("a.b.c"))
         self.assertNotEqual(parse_one("a.b.c.d", read="hive"), parse_one("a.b.c"))
         self.assertEqual(parse_one("a.b.c.d", read="hive"), parse_one("a.b.c.d"))
         self.assertEqual(parse_one("a + b * c - 1.0"), parse_one("a+b*c-1.0"))
@@ -179,9 +179,16 @@ class TestExpressions(unittest.TestCase):
         self.assertEqual(exp.table_name(parse_one("a.b", into=exp.Table)), "a.b")
         self.assertEqual(exp.table_name(parse_one("a.b.c", into=exp.Table)), "a.b.c")
         self.assertEqual(exp.table_name("a.b.c"), "a.b.c")
+        self.assertEqual(
+            exp.table_name(parse_one("foo.`{bar,er}`", read="databricks"), dialect="databricks"),
+            "foo.`{bar,er}`",
+        )
+        self.assertEqual(exp.table_name(exp.to_table("a-1.b.c", dialect="bigquery")), '"a-1".b.c')
+        self.assertEqual(exp.table_name(exp.to_table("a.b.c.d.e", dialect="bigquery")), "a.b.c.d.e")
 
     def test_table(self):
         self.assertEqual(exp.table_("a", alias="b"), parse_one("select * from a b").find(exp.Table))
+        self.assertEqual(exp.table_("a", "").sql(), "a")
 
     def test_replace_tables(self):
         self.assertEqual(
@@ -322,6 +329,10 @@ class TestExpressions(unittest.TestCase):
         cte = expression.find(exp.CTE)
         self.assertEqual(cte.alias_column_names, ["a", "b"])
 
+        expression = parse_one("SELECT * FROM tbl AS tbl(a, b)")
+        table = expression.find(exp.Table)
+        self.assertEqual(table.alias_column_names, ["a", "b"])
+
     def test_ctes(self):
         expression = parse_one("SELECT a FROM x")
         self.assertEqual(expression.ctes, [])
@@ -334,7 +345,7 @@ class TestExpressions(unittest.TestCase):
             {
                 parse_one("select a.b"),
                 parse_one("1+2"),
-                parse_one('"a".b'),
+                parse_one('"a"."b"'),
                 parse_one("a.b.c.d"),
             },
             {
@@ -438,18 +449,30 @@ class TestExpressions(unittest.TestCase):
         expression.find(exp.Table).replace(parse_one("y"))
         self.assertEqual(expression.sql(), "SELECT c, b FROM y")
 
-    def test_pop(self):
+    def test_arg_deletion(self):
+        # Using the pop helper method
         expression = parse_one("SELECT a, b FROM x")
         expression.find(exp.Column).pop()
         self.assertEqual(expression.sql(), "SELECT b FROM x")
+
         expression.find(exp.Column).pop()
         self.assertEqual(expression.sql(), "SELECT FROM x")
+
         expression.pop()
         self.assertEqual(expression.sql(), "SELECT FROM x")
 
         expression = parse_one("WITH x AS (SELECT a FROM x) SELECT * FROM x")
         expression.find(exp.With).pop()
         self.assertEqual(expression.sql(), "SELECT * FROM x")
+
+        # Manually deleting by setting to None
+        expression = parse_one("SELECT * FROM foo JOIN bar")
+        self.assertEqual(len(expression.args.get("joins", [])), 1)
+
+        expression.set("joins", None)
+        self.assertEqual(expression.sql(), "SELECT * FROM foo")
+        self.assertEqual(expression.args.get("joins", []), [])
+        self.assertIsNone(expression.args.get("joins"))
 
     def test_walk(self):
         expression = parse_one("SELECT * FROM (SELECT * FROM x)")
@@ -535,6 +558,10 @@ class TestExpressions(unittest.TestCase):
         self.assertIsInstance(parse_one("ARRAY(time, foo)"), exp.Array)
         self.assertIsInstance(parse_one("STANDARD_HASH('hello', 'sha256')"), exp.StandardHash)
         self.assertIsInstance(parse_one("DATE(foo)"), exp.Date)
+        self.assertIsInstance(parse_one("HEX(foo)"), exp.Hex)
+        self.assertIsInstance(parse_one("TO_HEX(foo)", read="bigquery"), exp.Hex)
+        self.assertIsInstance(parse_one("TO_HEX(MD5(foo))", read="bigquery"), exp.MD5)
+        self.assertIsInstance(parse_one("TRANSFORM(a, b)", read="spark"), exp.Transform)
 
     def test_column(self):
         column = parse_one("a.b.c.d")
@@ -640,7 +667,7 @@ class TestExpressions(unittest.TestCase):
             (True, "TRUE"),
             ((1, "2", None), "(1, '2', NULL)"),
             ([1, "2", None], "ARRAY(1, '2', NULL)"),
-            ({"x": None}, "MAP('x', NULL)"),
+            ({"x": None}, "MAP(ARRAY('x'), ARRAY(NULL))"),
             (
                 datetime.datetime(2022, 10, 1, 1, 1, 1, 1),
                 "TIME_STR_TO_TIME('2022-10-01T01:01:01.000001+00:00')",
@@ -654,6 +681,11 @@ class TestExpressions(unittest.TestCase):
         ]:
             with self.subTest(value):
                 self.assertEqual(exp.convert(value).sql(), expected)
+
+        self.assertEqual(
+            exp.convert({"test": "value"}).sql(dialect="spark"),
+            "MAP_FROM_ARRAYS(ARRAY('test'), ARRAY('value'))",
+        )
 
     def test_comment_alias(self):
         sql = """
@@ -815,6 +847,9 @@ FROM foo""",
         )
         self.assertEqual(exp.DataType.build("USER-DEFINED").sql(), "USER-DEFINED")
 
+        self.assertEqual(exp.DataType.build("ARRAY<UNKNOWN>").sql(), "ARRAY<UNKNOWN>")
+        self.assertEqual(exp.DataType.build("ARRAY<NULL>").sql(), "ARRAY<NULL>")
+
     def test_rename_table(self):
         self.assertEqual(
             exp.rename_table("t1", "t2").sql(),
@@ -853,3 +888,54 @@ FROM foo""",
 
         ast.meta["some_other_meta_key"] = "some_other_meta_value"
         self.assertEqual(ast.meta.get("some_other_meta_key"), "some_other_meta_value")
+
+    def test_unnest(self):
+        ast = parse_one("SELECT (((1)))")
+        self.assertIs(ast.selects[0].unnest(), ast.find(exp.Literal))
+
+        ast = parse_one("SELECT * FROM (((SELECT * FROM t)))")
+        self.assertIs(ast.args["from"].this.unnest(), list(ast.find_all(exp.Select))[1])
+
+        ast = parse_one("SELECT * FROM ((((SELECT * FROM t))) AS foo)")
+        second_subquery = ast.args["from"].this.this
+        innermost_subquery = list(ast.find_all(exp.Select))[1].parent
+        self.assertIs(second_subquery, innermost_subquery.unwrap())
+
+    def test_is_type(self):
+        ast = parse_one("CAST(x AS VARCHAR)")
+        assert ast.is_type("VARCHAR")
+        assert not ast.is_type("VARCHAR(5)")
+        assert not ast.is_type("FLOAT")
+
+        ast = parse_one("CAST(x AS VARCHAR(5))")
+        assert ast.is_type("VARCHAR")
+        assert ast.is_type("VARCHAR(5)")
+        assert not ast.is_type("VARCHAR(4)")
+        assert not ast.is_type("FLOAT")
+
+        ast = parse_one("CAST(x AS ARRAY<INT>)")
+        assert ast.is_type("ARRAY")
+        assert ast.is_type("ARRAY<INT>")
+        assert not ast.is_type("ARRAY<FLOAT>")
+        assert not ast.is_type("INT")
+
+        ast = parse_one("CAST(x AS ARRAY)")
+        assert ast.is_type("ARRAY")
+        assert not ast.is_type("ARRAY<INT>")
+        assert not ast.is_type("ARRAY<FLOAT>")
+        assert not ast.is_type("INT")
+
+        ast = parse_one("CAST(x AS STRUCT<a INT, b FLOAT>)")
+        assert ast.is_type("STRUCT")
+        assert ast.is_type("STRUCT<a INT, b FLOAT>")
+        assert not ast.is_type("STRUCT<a VARCHAR, b INT>")
+
+        dtype = exp.DataType.build("foo", udt=True)
+        assert dtype.is_type("foo")
+        assert not dtype.is_type("bar")
+
+        dtype = exp.DataType.build("a.b.c", udt=True)
+        assert dtype.is_type("a.b.c")
+
+        with self.assertRaises(ParseError):
+            exp.DataType.build("foo")

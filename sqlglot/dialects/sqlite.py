@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import typing as t
+
 from sqlglot import exp, generator, parser, tokens, transforms
 from sqlglot.dialects.dialect import (
     Dialect,
+    any_value_to_max_sql,
     arrow_json_extract_scalar_sql,
     arrow_json_extract_sql,
     concat_to_dpipe_sql,
@@ -16,7 +19,7 @@ from sqlglot.dialects.dialect import (
 from sqlglot.tokens import TokenType
 
 
-def _date_add_sql(self: generator.Generator, expression: exp.DateAdd) -> str:
+def _date_add_sql(self: SQLite.Generator, expression: exp.DateAdd) -> str:
     modifier = expression.expression
     modifier = modifier.name if modifier.is_string else self.sql(modifier)
     unit = expression.args.get("unit")
@@ -61,6 +64,7 @@ def _transform_create(expression: exp.Expression) -> exp.Expression:
 class SQLite(Dialect):
     # https://sqlite.org/forum/forumpost/5e575586ac5c711b?raw
     RESOLVES_IDENTIFIERS_AS_UPPERCASE = None
+    SUPPORTS_SEMI_ANTI_JOIN = False
 
     class Tokenizer(tokens.Tokenizer):
         IDENTIFIERS = ['"', ("[", "]"), "`"]
@@ -75,6 +79,8 @@ class SQLite(Dialect):
     class Generator(generator.Generator):
         JOIN_HINTS = False
         TABLE_HINTS = False
+        QUERY_HINTS = False
+        NVL2_SUPPORTED = False
 
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
@@ -100,6 +106,7 @@ class SQLite(Dialect):
 
         TRANSFORMS = {
             **generator.Generator.TRANSFORMS,
+            exp.AnyValue: any_value_to_max_sql,
             exp.Concat: concat_to_dpipe_sql,
             exp.CountIf: count_if_to_sum,
             exp.Create: transforms.preprocess([_transform_create]),
@@ -119,7 +126,11 @@ class SQLite(Dialect):
             exp.Pivot: no_pivot_sql,
             exp.SafeConcat: concat_to_dpipe_sql,
             exp.Select: transforms.preprocess(
-                [transforms.eliminate_distinct_on, transforms.eliminate_qualify]
+                [
+                    transforms.eliminate_distinct_on,
+                    transforms.eliminate_qualify,
+                    transforms.eliminate_semi_and_anti_joins,
+                ]
             ),
             exp.TableSample: no_tablesample_sql,
             exp.TimeStrToTime: lambda self, e: self.sql(e, "this"),
@@ -133,7 +144,7 @@ class SQLite(Dialect):
 
         LIMIT_FETCH = "LIMIT"
 
-        def cast_sql(self, expression: exp.Cast) -> str:
+        def cast_sql(self, expression: exp.Cast, safe_prefix: t.Optional[str] = None) -> str:
             if expression.is_type("date"):
                 return self.func("DATE", expression.this)
 
@@ -189,7 +200,7 @@ class SQLite(Dialect):
             if len(expression.expressions) > 1:
                 return rename_func("MIN")(self, expression)
 
-            return self.expressions(expression)
+            return self.sql(expression, "this")
 
         def transaction_sql(self, expression: exp.Transaction) -> str:
             this = expression.this

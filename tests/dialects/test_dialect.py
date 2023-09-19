@@ -1,6 +1,13 @@
 import unittest
 
-from sqlglot import Dialect, Dialects, ErrorLevel, UnsupportedError, parse_one
+from sqlglot import (
+    Dialect,
+    Dialects,
+    ErrorLevel,
+    ParseError,
+    UnsupportedError,
+    parse_one,
+)
 from sqlglot.dialects import Hive
 
 
@@ -23,9 +30,10 @@ class Validator(unittest.TestCase):
 
         Args:
             sql (str): Main SQL expression
-            dialect (str): dialect of `sql`
             read (dict): Mapping of dialect -> SQL
             write (dict): Mapping of dialect -> SQL
+            pretty (bool): prettify both read and write
+            identify (bool): quote identifiers in both read and write
         """
         expression = self.parse_one(sql)
 
@@ -78,10 +86,10 @@ class TestDialect(Validator):
             "CAST(a AS TEXT)",
             write={
                 "bigquery": "CAST(a AS STRING)",
-                "clickhouse": "CAST(a AS TEXT)",
+                "clickhouse": "CAST(a AS String)",
                 "drill": "CAST(a AS VARCHAR)",
                 "duckdb": "CAST(a AS TEXT)",
-                "mysql": "CAST(a AS TEXT)",
+                "mysql": "CAST(a AS CHAR)",
                 "hive": "CAST(a AS STRING)",
                 "oracle": "CAST(a AS CLOB)",
                 "postgres": "CAST(a AS TEXT)",
@@ -90,6 +98,7 @@ class TestDialect(Validator):
                 "snowflake": "CAST(a AS TEXT)",
                 "spark": "CAST(a AS STRING)",
                 "starrocks": "CAST(a AS STRING)",
+                "doris": "CAST(a AS STRING)",
             },
         )
         self.validate_all(
@@ -115,7 +124,7 @@ class TestDialect(Validator):
             "CAST(a AS VARBINARY(4))",
             write={
                 "bigquery": "CAST(a AS BYTES)",
-                "clickhouse": "CAST(a AS VARBINARY(4))",
+                "clickhouse": "CAST(a AS String)",
                 "duckdb": "CAST(a AS BLOB(4))",
                 "mysql": "CAST(a AS VARBINARY(4))",
                 "hive": "CAST(a AS BINARY(4))",
@@ -132,7 +141,7 @@ class TestDialect(Validator):
         self.validate_all(
             "CAST(MAP('a', '1') AS MAP(TEXT, TEXT))",
             write={
-                "clickhouse": "CAST(map('a', '1') AS Map(TEXT, TEXT))",
+                "clickhouse": "CAST(map('a', '1') AS Map(String, String))",
             },
         )
         self.validate_all(
@@ -160,7 +169,7 @@ class TestDialect(Validator):
                 "bigquery": "CAST(a AS STRING)",
                 "drill": "CAST(a AS VARCHAR)",
                 "duckdb": "CAST(a AS TEXT)",
-                "mysql": "CAST(a AS TEXT)",
+                "mysql": "CAST(a AS CHAR)",
                 "hive": "CAST(a AS STRING)",
                 "oracle": "CAST(a AS CLOB)",
                 "postgres": "CAST(a AS TEXT)",
@@ -169,6 +178,7 @@ class TestDialect(Validator):
                 "snowflake": "CAST(a AS TEXT)",
                 "spark": "CAST(a AS STRING)",
                 "starrocks": "CAST(a AS STRING)",
+                "doris": "CAST(a AS STRING)",
             },
         )
         self.validate_all(
@@ -177,7 +187,7 @@ class TestDialect(Validator):
                 "bigquery": "CAST(a AS STRING)",
                 "drill": "CAST(a AS VARCHAR)",
                 "duckdb": "CAST(a AS TEXT)",
-                "mysql": "CAST(a AS VARCHAR)",
+                "mysql": "CAST(a AS CHAR)",
                 "hive": "CAST(a AS STRING)",
                 "oracle": "CAST(a AS VARCHAR2)",
                 "postgres": "CAST(a AS VARCHAR)",
@@ -186,6 +196,7 @@ class TestDialect(Validator):
                 "snowflake": "CAST(a AS VARCHAR)",
                 "spark": "CAST(a AS STRING)",
                 "starrocks": "CAST(a AS VARCHAR)",
+                "doris": "CAST(a AS VARCHAR)",
             },
         )
         self.validate_all(
@@ -194,7 +205,7 @@ class TestDialect(Validator):
                 "bigquery": "CAST(a AS STRING)",
                 "drill": "CAST(a AS VARCHAR(3))",
                 "duckdb": "CAST(a AS TEXT(3))",
-                "mysql": "CAST(a AS VARCHAR(3))",
+                "mysql": "CAST(a AS CHAR(3))",
                 "hive": "CAST(a AS VARCHAR(3))",
                 "oracle": "CAST(a AS VARCHAR2(3))",
                 "postgres": "CAST(a AS VARCHAR(3))",
@@ -203,6 +214,7 @@ class TestDialect(Validator):
                 "snowflake": "CAST(a AS VARCHAR(3))",
                 "spark": "CAST(a AS VARCHAR(3))",
                 "starrocks": "CAST(a AS VARCHAR(3))",
+                "doris": "CAST(a AS VARCHAR(3))",
             },
         )
         self.validate_all(
@@ -218,22 +230,24 @@ class TestDialect(Validator):
                 "presto": "CAST(a AS SMALLINT)",
                 "redshift": "CAST(a AS SMALLINT)",
                 "snowflake": "CAST(a AS SMALLINT)",
-                "spark": "CAST(a AS SHORT)",
+                "spark": "CAST(a AS SMALLINT)",
                 "sqlite": "CAST(a AS INTEGER)",
                 "starrocks": "CAST(a AS SMALLINT)",
+                "doris": "CAST(a AS SMALLINT)",
             },
         )
         self.validate_all(
-            "TRY_CAST(a AS DOUBLE)",
+            "CAST(a AS DOUBLE)",
             read={
                 "postgres": "CAST(a AS DOUBLE PRECISION)",
                 "redshift": "CAST(a AS DOUBLE PRECISION)",
             },
             write={
-                "duckdb": "TRY_CAST(a AS DOUBLE)",
+                "duckdb": "CAST(a AS DOUBLE)",
                 "drill": "CAST(a AS DOUBLE)",
                 "postgres": "CAST(a AS DOUBLE PRECISION)",
                 "redshift": "CAST(a AS DOUBLE PRECISION)",
+                "doris": "CAST(a AS DOUBLE)",
             },
         )
 
@@ -267,13 +281,17 @@ class TestDialect(Validator):
             write={
                 "starrocks": "CAST(a AS DATETIME)",
                 "redshift": "CAST(a AS TIMESTAMP)",
+                "doris": "CAST(a AS DATETIME)",
+                "mysql": "CAST(a AS DATETIME)",
             },
         )
         self.validate_all(
             "CAST(a AS TIMESTAMPTZ)",
             write={
-                "starrocks": "CAST(a AS DATETIME)",
-                "redshift": "CAST(a AS TIMESTAMPTZ)",
+                "starrocks": "TIMESTAMP(a)",
+                "redshift": "CAST(a AS TIMESTAMP WITH TIME ZONE)",
+                "doris": "CAST(a AS DATETIME)",
+                "mysql": "TIMESTAMP(a)",
             },
         )
         self.validate_all("CAST(a AS TINYINT)", write={"oracle": "CAST(a AS NUMBER)"})
@@ -359,6 +377,60 @@ class TestDialect(Validator):
             },
         )
 
+    def test_nvl2(self):
+        self.validate_all(
+            "SELECT NVL2(a, b, c)",
+            write={
+                "": "SELECT NVL2(a, b, c)",
+                "bigquery": "SELECT CASE WHEN NOT a IS NULL THEN b ELSE c END",
+                "clickhouse": "SELECT CASE WHEN NOT a IS NULL THEN b ELSE c END",
+                "databricks": "SELECT NVL2(a, b, c)",
+                "doris": "SELECT CASE WHEN NOT a IS NULL THEN b ELSE c END",
+                "drill": "SELECT CASE WHEN NOT a IS NULL THEN b ELSE c END",
+                "duckdb": "SELECT CASE WHEN NOT a IS NULL THEN b ELSE c END",
+                "hive": "SELECT CASE WHEN NOT a IS NULL THEN b ELSE c END",
+                "mysql": "SELECT CASE WHEN NOT a IS NULL THEN b ELSE c END",
+                "oracle": "SELECT NVL2(a, b, c)",
+                "postgres": "SELECT CASE WHEN NOT a IS NULL THEN b ELSE c END",
+                "presto": "SELECT CASE WHEN NOT a IS NULL THEN b ELSE c END",
+                "redshift": "SELECT NVL2(a, b, c)",
+                "snowflake": "SELECT NVL2(a, b, c)",
+                "spark": "SELECT NVL2(a, b, c)",
+                "spark2": "SELECT NVL2(a, b, c)",
+                "sqlite": "SELECT CASE WHEN NOT a IS NULL THEN b ELSE c END",
+                "starrocks": "SELECT CASE WHEN NOT a IS NULL THEN b ELSE c END",
+                "teradata": "SELECT NVL2(a, b, c)",
+                "trino": "SELECT CASE WHEN NOT a IS NULL THEN b ELSE c END",
+                "tsql": "SELECT CASE WHEN NOT a IS NULL THEN b ELSE c END",
+            },
+        )
+        self.validate_all(
+            "SELECT NVL2(a, b)",
+            write={
+                "": "SELECT NVL2(a, b)",
+                "bigquery": "SELECT CASE WHEN NOT a IS NULL THEN b END",
+                "clickhouse": "SELECT CASE WHEN NOT a IS NULL THEN b END",
+                "databricks": "SELECT NVL2(a, b)",
+                "doris": "SELECT CASE WHEN NOT a IS NULL THEN b END",
+                "drill": "SELECT CASE WHEN NOT a IS NULL THEN b END",
+                "duckdb": "SELECT CASE WHEN NOT a IS NULL THEN b END",
+                "hive": "SELECT CASE WHEN NOT a IS NULL THEN b END",
+                "mysql": "SELECT CASE WHEN NOT a IS NULL THEN b END",
+                "oracle": "SELECT NVL2(a, b)",
+                "postgres": "SELECT CASE WHEN NOT a IS NULL THEN b END",
+                "presto": "SELECT CASE WHEN NOT a IS NULL THEN b END",
+                "redshift": "SELECT NVL2(a, b)",
+                "snowflake": "SELECT NVL2(a, b)",
+                "spark": "SELECT NVL2(a, b)",
+                "spark2": "SELECT NVL2(a, b)",
+                "sqlite": "SELECT CASE WHEN NOT a IS NULL THEN b END",
+                "starrocks": "SELECT CASE WHEN NOT a IS NULL THEN b END",
+                "teradata": "SELECT NVL2(a, b)",
+                "trino": "SELECT CASE WHEN NOT a IS NULL THEN b END",
+                "tsql": "SELECT CASE WHEN NOT a IS NULL THEN b END",
+            },
+        )
+
     def test_time(self):
         self.validate_all(
             "STR_TO_TIME(x, '%Y-%m-%dT%H:%M:%S')",
@@ -402,12 +474,13 @@ class TestDialect(Validator):
             },
         )
         self.validate_all(
-            "STR_TO_UNIX('2020-01-01', '%Y-%M-%d')",
+            "STR_TO_UNIX('2020-01-01', '%Y-%m-%d')",
             write={
-                "duckdb": "EPOCH(STRPTIME('2020-01-01', '%Y-%M-%d'))",
-                "hive": "UNIX_TIMESTAMP('2020-01-01', 'yyyy-mm-dd')",
-                "presto": "TO_UNIXTIME(DATE_PARSE('2020-01-01', '%Y-%i-%d'))",
-                "starrocks": "UNIX_TIMESTAMP('2020-01-01', '%Y-%i-%d')",
+                "duckdb": "EPOCH(STRPTIME('2020-01-01', '%Y-%m-%d'))",
+                "hive": "UNIX_TIMESTAMP('2020-01-01', 'yyyy-MM-dd')",
+                "presto": "TO_UNIXTIME(DATE_PARSE('2020-01-01', '%Y-%m-%d'))",
+                "starrocks": "UNIX_TIMESTAMP('2020-01-01', '%Y-%m-%d')",
+                "doris": "UNIX_TIMESTAMP('2020-01-01', '%Y-%m-%d')",
             },
         )
         self.validate_all(
@@ -418,6 +491,7 @@ class TestDialect(Validator):
                 "hive": "TO_DATE('2020-01-01')",
                 "presto": "CAST('2020-01-01' AS TIMESTAMP)",
                 "starrocks": "TO_DATE('2020-01-01')",
+                "doris": "TO_DATE('2020-01-01')",
             },
         )
         self.validate_all(
@@ -428,6 +502,7 @@ class TestDialect(Validator):
                 "hive": "CAST('2020-01-01' AS TIMESTAMP)",
                 "presto": "CAST('2020-01-01' AS TIMESTAMP)",
                 "sqlite": "'2020-01-01'",
+                "doris": "CAST('2020-01-01' AS DATETIME)",
             },
         )
         self.validate_all(
@@ -437,6 +512,7 @@ class TestDialect(Validator):
                 "hive": "UNIX_TIMESTAMP('2020-01-01')",
                 "mysql": "UNIX_TIMESTAMP('2020-01-01')",
                 "presto": "TO_UNIXTIME(DATE_PARSE('2020-01-01', '%Y-%m-%d %T'))",
+                "doris": "UNIX_TIMESTAMP('2020-01-01')",
             },
         )
         self.validate_all(
@@ -449,6 +525,7 @@ class TestDialect(Validator):
                 "postgres": "TO_CHAR(x, 'YYYY-MM-DD')",
                 "presto": "DATE_FORMAT(x, '%Y-%m-%d')",
                 "redshift": "TO_CHAR(x, 'YYYY-MM-DD')",
+                "doris": "DATE_FORMAT(x, '%Y-%m-%d')",
             },
         )
         self.validate_all(
@@ -459,6 +536,7 @@ class TestDialect(Validator):
                 "hive": "CAST(x AS STRING)",
                 "presto": "CAST(x AS VARCHAR)",
                 "redshift": "CAST(x AS VARCHAR(MAX))",
+                "doris": "CAST(x AS STRING)",
             },
         )
         self.validate_all(
@@ -468,6 +546,7 @@ class TestDialect(Validator):
                 "duckdb": "EPOCH(x)",
                 "hive": "UNIX_TIMESTAMP(x)",
                 "presto": "TO_UNIXTIME(x)",
+                "doris": "UNIX_TIMESTAMP(x)",
             },
         )
         self.validate_all(
@@ -476,6 +555,7 @@ class TestDialect(Validator):
                 "duckdb": "SUBSTRING(CAST(x AS TEXT), 1, 10)",
                 "hive": "SUBSTRING(CAST(x AS STRING), 1, 10)",
                 "presto": "SUBSTRING(CAST(x AS VARCHAR), 1, 10)",
+                "doris": "SUBSTRING(CAST(x AS STRING), 1, 10)",
             },
         )
         self.validate_all(
@@ -487,6 +567,7 @@ class TestDialect(Validator):
                 "postgres": "CAST(x AS DATE)",
                 "presto": "CAST(CAST(x AS TIMESTAMP) AS DATE)",
                 "snowflake": "CAST(x AS DATE)",
+                "doris": "TO_DATE(x)",
             },
         )
         self.validate_all(
@@ -505,6 +586,7 @@ class TestDialect(Validator):
                 "hive": "FROM_UNIXTIME(x, y)",
                 "presto": "DATE_FORMAT(FROM_UNIXTIME(x), y)",
                 "starrocks": "FROM_UNIXTIME(x, y)",
+                "doris": "FROM_UNIXTIME(x, y)",
             },
         )
         self.validate_all(
@@ -516,6 +598,7 @@ class TestDialect(Validator):
                 "postgres": "TO_TIMESTAMP(x)",
                 "presto": "FROM_UNIXTIME(x)",
                 "starrocks": "FROM_UNIXTIME(x)",
+                "doris": "FROM_UNIXTIME(x)",
             },
         )
         self.validate_all(
@@ -582,6 +665,7 @@ class TestDialect(Validator):
                 "sqlite": "DATE(x, '1 DAY')",
                 "starrocks": "DATE_ADD(x, INTERVAL 1 DAY)",
                 "tsql": "DATEADD(DAY, 1, x)",
+                "doris": "DATE_ADD(x, INTERVAL 1 DAY)",
             },
         )
         self.validate_all(
@@ -595,13 +679,13 @@ class TestDialect(Validator):
                 "presto": "DATE_ADD('day', 1, x)",
                 "spark": "DATE_ADD(x, 1)",
                 "starrocks": "DATE_ADD(x, INTERVAL 1 DAY)",
+                "doris": "DATE_ADD(x, INTERVAL 1 DAY)",
             },
         )
         self.validate_all(
             "DATE_TRUNC('day', x)",
             read={
                 "bigquery": "DATE_TRUNC(x, day)",
-                "duckdb": "DATE_TRUNC('day', x)",
                 "spark": "TRUNC(x, 'day')",
             },
             write={
@@ -613,17 +697,20 @@ class TestDialect(Validator):
                 "snowflake": "DATE_TRUNC('day', x)",
                 "starrocks": "DATE_TRUNC('day', x)",
                 "spark": "TRUNC(x, 'day')",
+                "doris": "DATE_TRUNC(x, 'day')",
             },
         )
         self.validate_all(
             "TIMESTAMP_TRUNC(x, day)",
             read={
                 "bigquery": "TIMESTAMP_TRUNC(x, day)",
+                "duckdb": "DATE_TRUNC('day', x)",
                 "presto": "DATE_TRUNC('day', x)",
                 "postgres": "DATE_TRUNC('day', x)",
                 "snowflake": "DATE_TRUNC('day', x)",
                 "starrocks": "DATE_TRUNC('day', x)",
                 "spark": "DATE_TRUNC('day', x)",
+                "doris": "DATE_TRUNC('day', x)",
             },
         )
         self.validate_all(
@@ -634,7 +721,7 @@ class TestDialect(Validator):
             },
         )
         self.validate_all(
-            "TIMESTAMP_TRUNC(TRY_CAST(x AS DATE), day)",
+            "TIMESTAMP_TRUNC(CAST(x AS DATE), day)",
             read={"postgres": "DATE_TRUNC('day', x::DATE)"},
         )
         self.validate_all(
@@ -684,6 +771,7 @@ class TestDialect(Validator):
                 "snowflake": "DATE_TRUNC('year', x)",
                 "starrocks": "DATE_TRUNC('year', x)",
                 "spark": "TRUNC(x, 'year')",
+                "doris": "DATE_TRUNC(x, 'year')",
             },
         )
         self.validate_all(
@@ -698,6 +786,7 @@ class TestDialect(Validator):
             write={
                 "bigquery": "TIMESTAMP_TRUNC(x, year)",
                 "spark": "DATE_TRUNC('year', x)",
+                "doris": "DATE_TRUNC(x, 'year')",
             },
         )
         self.validate_all(
@@ -719,6 +808,7 @@ class TestDialect(Validator):
                 "hive": "CAST(FROM_UNIXTIME(UNIX_TIMESTAMP(x, 'yyyy-MM-ddTHH:mm:ss')) AS DATE)",
                 "presto": "CAST(DATE_PARSE(x, '%Y-%m-%dT%T') AS DATE)",
                 "spark": "TO_DATE(x, 'yyyy-MM-ddTHH:mm:ss')",
+                "doris": "STR_TO_DATE(x, '%Y-%m-%dT%T')",
             },
         )
         self.validate_all(
@@ -730,6 +820,7 @@ class TestDialect(Validator):
                 "hive": "CAST(x AS DATE)",
                 "presto": "CAST(DATE_PARSE(x, '%Y-%m-%d') AS DATE)",
                 "spark": "TO_DATE(x)",
+                "doris": "STR_TO_DATE(x, '%Y-%m-%d')",
             },
         )
         self.validate_all(
@@ -781,9 +872,10 @@ class TestDialect(Validator):
             "TIMESTAMP '2022-01-01'",
             write={
                 "drill": "CAST('2022-01-01' AS TIMESTAMP)",
-                "mysql": "CAST('2022-01-01' AS TIMESTAMP)",
+                "mysql": "CAST('2022-01-01' AS DATETIME)",
                 "starrocks": "CAST('2022-01-01' AS DATETIME)",
                 "hive": "CAST('2022-01-01' AS TIMESTAMP)",
+                "doris": "CAST('2022-01-01' AS DATETIME)",
             },
         )
         self.validate_all(
@@ -792,6 +884,7 @@ class TestDialect(Validator):
                 "mysql": "TIMESTAMP('2022-01-01')",
                 "starrocks": "TIMESTAMP('2022-01-01')",
                 "hive": "TIMESTAMP('2022-01-01')",
+                "doris": "TIMESTAMP('2022-01-01')",
             },
         )
 
@@ -807,6 +900,7 @@ class TestDialect(Validator):
                         "mysql",
                         "presto",
                         "starrocks",
+                        "doris",
                     )
                 },
                 write={
@@ -820,6 +914,7 @@ class TestDialect(Validator):
                         "hive",
                         "spark",
                         "starrocks",
+                        "doris",
                     )
                 },
             )
@@ -829,7 +924,7 @@ class TestDialect(Validator):
             "ARRAY(0, 1, 2)",
             write={
                 "bigquery": "[0, 1, 2]",
-                "duckdb": "LIST_VALUE(0, 1, 2)",
+                "duckdb": "[0, 1, 2]",
                 "presto": "ARRAY[0, 1, 2]",
                 "spark": "ARRAY(0, 1, 2)",
             },
@@ -848,7 +943,7 @@ class TestDialect(Validator):
             "ARRAY_SUM(ARRAY(1, 2))",
             write={
                 "trino": "REDUCE(ARRAY[1, 2], 0, (acc, x) -> acc + x, acc -> acc)",
-                "duckdb": "LIST_SUM(LIST_VALUE(1, 2))",
+                "duckdb": "LIST_SUM([1, 2])",
                 "hive": "ARRAY_SUM(ARRAY(1, 2))",
                 "presto": "ARRAY_SUM(ARRAY[1, 2])",
                 "spark": "AGGREGATE(ARRAY(1, 2), 0, (acc, x) -> acc + x, acc -> acc)",
@@ -869,12 +964,12 @@ class TestDialect(Validator):
         self.validate_all(
             "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname",
             write={
-                "bigquery": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname NULLS LAST, lname",
-                "duckdb": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname, lname NULLS FIRST",
-                "oracle": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname NULLS LAST, lname",
-                "presto": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname, lname NULLS FIRST",
-                "hive": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname NULLS LAST, lname",
-                "spark": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname NULLS LAST, lname",
+                "bigquery": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname",
+                "duckdb": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC, lname NULLS FIRST",
+                "oracle": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname",
+                "presto": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC, lname NULLS FIRST",
+                "hive": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname",
+                "spark": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname",
             },
         )
 
@@ -886,6 +981,7 @@ class TestDialect(Validator):
                 "postgres": "x->'y'",
                 "presto": "JSON_EXTRACT(x, 'y')",
                 "starrocks": "x -> 'y'",
+                "doris": "x -> 'y'",
             },
             write={
                 "mysql": "JSON_EXTRACT(x, 'y')",
@@ -893,6 +989,7 @@ class TestDialect(Validator):
                 "postgres": "x -> 'y'",
                 "presto": "JSON_EXTRACT(x, 'y')",
                 "starrocks": "x -> 'y'",
+                "doris": "x -> 'y'",
             },
         )
         self.validate_all(
@@ -1115,6 +1212,7 @@ class TestDialect(Validator):
                 "sqlite": "LOWER(x) LIKE '%y'",
                 "starrocks": "LOWER(x) LIKE '%y'",
                 "trino": "LOWER(x) LIKE '%y'",
+                "doris": "LOWER(x) LIKE '%y'",
             },
         )
         self.validate_all(
@@ -1256,7 +1354,7 @@ class TestDialect(Validator):
         self.validate_all(
             "SELECT IF(COALESCE(bar, 0) = 1, TRUE, FALSE) as foo FROM baz",
             write={
-                "bigquery": "SELECT CASE WHEN COALESCE(bar, 0) = 1 THEN TRUE ELSE FALSE END AS foo FROM baz",
+                "bigquery": "SELECT IF(COALESCE(bar, 0) = 1, TRUE, FALSE) AS foo FROM baz",
                 "duckdb": "SELECT CASE WHEN COALESCE(bar, 0) = 1 THEN TRUE ELSE FALSE END AS foo FROM baz",
                 "presto": "SELECT IF(COALESCE(bar, 0) = 1, TRUE, FALSE) AS foo FROM baz",
                 "hive": "SELECT IF(COALESCE(bar, 0) = 1, TRUE, FALSE) AS foo FROM baz",
@@ -1307,7 +1405,7 @@ class TestDialect(Validator):
             write={
                 "sqlite": "SELECT x FROM y LIMIT 10",
                 "oracle": "SELECT x FROM y FETCH FIRST 10 ROWS ONLY",
-                "tsql": "SELECT x FROM y FETCH FIRST 10 ROWS ONLY",
+                "tsql": "SELECT TOP 10 x FROM y",
             },
         )
         self.validate_all(
@@ -1356,7 +1454,7 @@ class TestDialect(Validator):
             write={
                 "duckdb": "CREATE TABLE t (c TEXT, nc TEXT, v1 TEXT, v2 TEXT, nv TEXT, nv2 TEXT)",
                 "hive": "CREATE TABLE t (c CHAR, nc CHAR, v1 STRING, v2 STRING, nv STRING, nv2 STRING)",
-                "oracle": "CREATE TABLE t (c CHAR, nc CHAR, v1 VARCHAR2, v2 VARCHAR2, nv NVARCHAR2, nv2 NVARCHAR2)",
+                "oracle": "CREATE TABLE t (c CHAR, nc NCHAR, v1 VARCHAR2, v2 VARCHAR2, nv NVARCHAR2, nv2 NVARCHAR2)",
                 "postgres": "CREATE TABLE t (c CHAR, nc CHAR, v1 VARCHAR, v2 VARCHAR, nv VARCHAR, nv2 VARCHAR)",
                 "sqlite": "CREATE TABLE t (c TEXT, nc TEXT, v1 TEXT, v2 TEXT, nv TEXT, nv2 TEXT)",
             },
@@ -1369,27 +1467,27 @@ class TestDialect(Validator):
             },
         )
         self.validate_all(
-            "CREATE INDEX my_idx ON tbl (a, b)",
+            "CREATE INDEX my_idx ON tbl(a, b)",
             read={
-                "hive": "CREATE INDEX my_idx ON TABLE tbl (a, b)",
-                "sqlite": "CREATE INDEX my_idx ON tbl (a, b)",
+                "hive": "CREATE INDEX my_idx ON TABLE tbl(a, b)",
+                "sqlite": "CREATE INDEX my_idx ON tbl(a, b)",
             },
             write={
-                "hive": "CREATE INDEX my_idx ON TABLE tbl (a, b)",
-                "postgres": "CREATE INDEX my_idx ON tbl (a NULLS FIRST, b NULLS FIRST)",
-                "sqlite": "CREATE INDEX my_idx ON tbl (a, b)",
+                "hive": "CREATE INDEX my_idx ON TABLE tbl(a, b)",
+                "postgres": "CREATE INDEX my_idx ON tbl(a NULLS FIRST, b NULLS FIRST)",
+                "sqlite": "CREATE INDEX my_idx ON tbl(a, b)",
             },
         )
         self.validate_all(
-            "CREATE UNIQUE INDEX my_idx ON tbl (a, b)",
+            "CREATE UNIQUE INDEX my_idx ON tbl(a, b)",
             read={
-                "hive": "CREATE UNIQUE INDEX my_idx ON TABLE tbl (a, b)",
-                "sqlite": "CREATE UNIQUE INDEX my_idx ON tbl (a, b)",
+                "hive": "CREATE UNIQUE INDEX my_idx ON TABLE tbl(a, b)",
+                "sqlite": "CREATE UNIQUE INDEX my_idx ON tbl(a, b)",
             },
             write={
-                "hive": "CREATE UNIQUE INDEX my_idx ON TABLE tbl (a, b)",
-                "postgres": "CREATE UNIQUE INDEX my_idx ON tbl (a NULLS FIRST, b NULLS FIRST)",
-                "sqlite": "CREATE UNIQUE INDEX my_idx ON tbl (a, b)",
+                "hive": "CREATE UNIQUE INDEX my_idx ON TABLE tbl(a, b)",
+                "postgres": "CREATE UNIQUE INDEX my_idx ON tbl(a NULLS FIRST, b NULLS FIRST)",
+                "sqlite": "CREATE UNIQUE INDEX my_idx ON tbl(a, b)",
             },
         )
         self.validate_all(
@@ -1413,7 +1511,8 @@ class TestDialect(Validator):
                 "presto": "SELECT a AS b FROM x GROUP BY 1",
                 "hive": "SELECT a AS b FROM x GROUP BY 1",
                 "oracle": "SELECT a AS b FROM x GROUP BY 1",
-                "spark": "SELECT a AS b FROM x GROUP BY 1",
+                "spark": "SELECT a AS b FROM x GROUP BY b",
+                "spark2": "SELECT a AS b FROM x GROUP BY 1",
             },
         )
         self.validate_all(
@@ -1511,6 +1610,7 @@ SELECT
                 "redshift": "BEGIN",
                 "snowflake": "BEGIN",
                 "sqlite": "BEGIN TRANSACTION",
+                "tsql": "BEGIN TRANSACTION",
             },
         )
         self.validate_all(
@@ -1674,3 +1774,19 @@ SELECT
                 "tsql": "SELECT COUNT_IF(col % 2 = 0) FILTER(WHERE col < 1000) FROM foo",
             },
         )
+
+    def test_cast_to_user_defined_type(self):
+        self.validate_all(
+            "CAST(x AS some_udt)",
+            write={
+                "": "CAST(x AS some_udt)",
+                "oracle": "CAST(x AS some_udt)",
+                "postgres": "CAST(x AS some_udt)",
+                "presto": "CAST(x AS some_udt)",
+                "teradata": "CAST(x AS some_udt)",
+                "tsql": "CAST(x AS some_udt)",
+            },
+        )
+
+        with self.assertRaises(ParseError):
+            parse_one("CAST(x AS some_udt)", read="bigquery")

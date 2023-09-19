@@ -368,9 +368,7 @@ def covar_samp(col1: ColumnOrName, col2: ColumnOrName) -> Column:
 
 
 def first(col: ColumnOrName, ignorenulls: t.Optional[bool] = None) -> Column:
-    if ignorenulls is not None:
-        return Column.invoke_anonymous_function(col, "FIRST", ignorenulls)
-    return Column.invoke_anonymous_function(col, "FIRST")
+    return Column.invoke_expression_over_column(col, expression.First, ignore_nulls=ignorenulls)
 
 
 def grouping_id(*cols: ColumnOrName) -> Column:
@@ -386,7 +384,7 @@ def input_file_name() -> Column:
 
 
 def isnan(col: ColumnOrName) -> Column:
-    return Column.invoke_anonymous_function(col, "ISNAN")
+    return Column.invoke_expression_over_column(col, expression.IsNan)
 
 
 def isnull(col: ColumnOrName) -> Column:
@@ -394,9 +392,7 @@ def isnull(col: ColumnOrName) -> Column:
 
 
 def last(col: ColumnOrName, ignorenulls: t.Optional[bool] = None) -> Column:
-    if ignorenulls is not None:
-        return Column.invoke_anonymous_function(col, "LAST", ignorenulls)
-    return Column.invoke_anonymous_function(col, "LAST")
+    return Column.invoke_expression_over_column(col, expression.Last, ignore_nulls=ignorenulls)
 
 
 def monotonically_increasing_id() -> Column:
@@ -600,8 +596,13 @@ def months_between(
     date1: ColumnOrName, date2: ColumnOrName, roundOff: t.Optional[bool] = None
 ) -> Column:
     if roundOff is None:
-        return Column.invoke_anonymous_function(date1, "MONTHS_BETWEEN", date2)
-    return Column.invoke_anonymous_function(date1, "MONTHS_BETWEEN", date2, roundOff)
+        return Column.invoke_expression_over_column(
+            date1, expression.MonthsBetween, expression=date2
+        )
+
+    return Column.invoke_expression_over_column(
+        date1, expression.MonthsBetween, expression=date2, roundoff=roundOff
+    )
 
 
 def to_date(col: ColumnOrName, format: t.Optional[str] = None) -> Column:
@@ -614,8 +615,9 @@ def to_date(col: ColumnOrName, format: t.Optional[str] = None) -> Column:
 
 def to_timestamp(col: ColumnOrName, format: t.Optional[str] = None) -> Column:
     if format is not None:
-        return Column.invoke_anonymous_function(col, "TO_TIMESTAMP", lit(format))
-    return Column.invoke_anonymous_function(col, "TO_TIMESTAMP")
+        return Column.invoke_expression_over_column(col, expression.StrToTime, format=lit(format))
+
+    return Column.ensure_col(col).cast("timestamp")
 
 
 def trunc(col: ColumnOrName, format: str) -> Column:
@@ -875,8 +877,16 @@ def regexp_extract(str: ColumnOrName, pattern: str, idx: t.Optional[int] = None)
     )
 
 
-def regexp_replace(str: ColumnOrName, pattern: str, replacement: str) -> Column:
-    return Column.invoke_anonymous_function(str, "REGEXP_REPLACE", lit(pattern), lit(replacement))
+def regexp_replace(
+    str: ColumnOrName, pattern: str, replacement: str, position: t.Optional[int] = None
+) -> Column:
+    return Column.invoke_expression_over_column(
+        str,
+        expression.RegexpReplace,
+        expression=lit(pattern),
+        replacement=lit(replacement),
+        position=position,
+    )
 
 
 def initcap(col: ColumnOrName) -> Column:
@@ -1119,7 +1129,7 @@ def map_entries(col: ColumnOrName) -> Column:
 
 
 def map_from_entries(col: ColumnOrName) -> Column:
-    return Column.invoke_anonymous_function(col, "MAP_FROM_ENTRIES")
+    return Column.invoke_expression_over_column(col, expression.MapFromEntries)
 
 
 def array_repeat(col: ColumnOrName, count: t.Union[ColumnOrName, int]) -> Column:
@@ -1186,7 +1196,9 @@ def transform(
     f: t.Union[t.Callable[[Column], Column], t.Callable[[Column, Column], Column]],
 ) -> Column:
     f_expression = _get_lambda_from_func(f)
-    return Column.invoke_anonymous_function(col, "TRANSFORM", Column(f_expression))
+    return Column.invoke_expression_over_column(
+        col, expression.Transform, expression=Column(f_expression)
+    )
 
 
 def exists(col: ColumnOrName, f: t.Callable[[Column], Column]) -> Column:

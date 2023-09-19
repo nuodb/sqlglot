@@ -638,7 +638,7 @@ SELECT
 FROM "users" AS "u"
 CROSS JOIN LATERAL (
   SELECT
-    "l"."log_date"
+    "l"."log_date" AS "log_date"
   FROM "logs" AS "l"
   WHERE
     "l"."log_date" <= 100 AND "l"."user_id" = "u"."user_id"
@@ -676,8 +676,350 @@ WHERE
   `TOp_TeRmS`.`rank` = 1
   AND CAST(`TOp_TeRmS`.`refresh_date` AS DATE) >= DATE_SUB(CURRENT_DATE, INTERVAL 2 WEEK)
 GROUP BY
-  `TOp_TeRmS`.`refresh_date`,
-  `TOp_TeRmS`.`term`,
-  `TOp_TeRmS`.`rank`
+  `day`,
+  `top_term`,
+  `rank`
 ORDER BY
   `day` DESC;
+
+
+# title: group by keys cannot be simplified
+SELECT a + 1 + 1 + 1 + 1 AS b, 2 + 1 AS c FROM x GROUP BY a + 1 + 1 HAVING a + 1 + 1 + 1 + 1 > 1;
+SELECT
+  "x"."a" + 1 + 1 + 1 + 1 AS "b",
+  3 AS "c"
+FROM "x" AS "x"
+GROUP BY
+  "x"."a" + 1 + 1
+HAVING
+  "x"."a" + 1 + 1 + 1 + 1 > 1;
+
+# title: replace alias with mult expression without wrapping it
+WITH cte AS (SELECT a * b AS c, a AS d, b as e FROM x) SELECT c + d - (c - e) AS f FROM cte;
+SELECT
+  "x"."a" * "x"."b" + "x"."a" - (
+    "x"."a" * "x"."b" - "x"."b"
+  ) AS "f"
+FROM "x" AS "x";
+
+# title: wrapped table without alias
+# execute: false
+SELECT * FROM (tbl);
+SELECT
+  *
+FROM (
+  "tbl" AS "tbl"
+);
+
+# title: wrapped table with alias
+# execute: false
+SELECT * FROM (tbl AS tbl);
+SELECT
+  *
+FROM (
+  "tbl" AS "tbl"
+);
+
+# title: wrapped join of tables without alias
+SELECT a, c FROM (x LEFT JOIN y ON a = c);
+SELECT
+  "x"."a" AS "a",
+  "y"."c" AS "c"
+FROM (
+  "x" AS "x"
+    LEFT JOIN "y" AS "y"
+      ON "x"."a" = "y"."c"
+);
+
+# title: wrapped join of tables with alias
+# execute: false
+SELECT a, c FROM (x LEFT JOIN y ON a = c) AS t;
+SELECT
+  "x"."a" AS "a",
+  "y"."c" AS "c"
+FROM "x" AS "x"
+LEFT JOIN "y" AS "y"
+  ON "x"."a" = "y"."c";
+
+# title: chained wrapped joins without aliases
+# execute: false
+SELECT * FROM ((a CROSS JOIN ((b CROSS JOIN c) CROSS JOIN (d CROSS JOIN e))));
+SELECT
+  *
+FROM (
+  (
+    "a" AS "a"
+      CROSS JOIN (
+        (
+          "b" AS "b"
+            CROSS JOIN "c" AS "c"
+        )
+        CROSS JOIN (
+          "d" AS "d"
+            CROSS JOIN "e" AS "e"
+        )
+      )
+  )
+);
+
+# title: chained wrapped joins with aliases
+# execute: false
+SELECT * FROM ((a AS foo CROSS JOIN b AS bar) CROSS JOIN c AS baz);
+SELECT
+  *
+FROM (
+  (
+    "a" AS "foo"
+      CROSS JOIN "b" AS "bar"
+  )
+  CROSS JOIN "c" AS "baz"
+);
+
+# title: table joined with join construct
+SELECT x.a, y.b, z.c FROM x LEFT JOIN (y INNER JOIN z ON y.c = z.c) ON x.b = y.b;
+SELECT
+  "x"."a" AS "a",
+  "y"."b" AS "b",
+  "z"."c" AS "c"
+FROM "x" AS "x"
+LEFT JOIN (
+  "y" AS "y"
+    JOIN "z" AS "z"
+      ON "y"."c" = "z"."c"
+)
+  ON "x"."b" = "y"."b";
+
+# title: select * from table joined with join construct
+# execute: false
+SELECT * FROM x LEFT JOIN (y INNER JOIN z ON y.c = z.c) ON x.b = y.b;
+SELECT
+  "y"."b" AS "b",
+  "y"."c" AS "c",
+  "z"."a" AS "a",
+  "z"."c" AS "c",
+  "x"."a" AS "a",
+  "x"."b" AS "b"
+FROM "x" AS "x"
+LEFT JOIN (
+  "y" AS "y"
+    JOIN "z" AS "z"
+      ON "y"."c" = "z"."c"
+)
+  ON "x"."b" = "y"."b";
+
+# title: select * from wrapped subquery
+# execute: false
+SELECT * FROM ((SELECT * FROM tbl));
+WITH "_q_0" AS (
+  SELECT
+    *
+  FROM "tbl" AS "tbl"
+)
+SELECT
+  *
+FROM (
+  "_q_0" AS "_q_0"
+);
+
+# title: select * from wrapped subquery joined to a table (known schema)
+SELECT * FROM ((SELECT * FROM x) INNER JOIN y ON a = c);
+SELECT
+  "x"."a" AS "a",
+  "x"."b" AS "b",
+  "y"."b" AS "b",
+  "y"."c" AS "c"
+FROM (
+  "x" AS "x"
+    JOIN "y" AS "y"
+      ON "x"."a" = "y"."c"
+);
+
+# title: select * from wrapped subquery joined to a table (unknown schema)
+# execute: false
+SELECT * FROM ((SELECT c FROM t1) JOIN t2);
+WITH "_q_0" AS (
+  SELECT
+    "t1"."c" AS "c"
+  FROM "t1" AS "t1"
+)
+SELECT
+  *
+FROM (
+  "_q_0" AS "_q_0"
+    CROSS JOIN "t2" AS "t2"
+);
+
+# title: select specific columns from wrapped subquery joined to a table
+SELECT b FROM ((SELECT a FROM x) INNER JOIN y ON a = b);
+SELECT
+  "y"."b" AS "b"
+FROM (
+  "x" AS "x"
+    JOIN "y" AS "y"
+      ON "x"."a" = "y"."b"
+);
+
+# title: select * from wrapped join of subqueries (unknown schema)
+# execute: false
+SELECT * FROM ((SELECT * FROM t1) JOIN (SELECT * FROM t2));
+WITH "_q_0" AS (
+  SELECT
+    *
+  FROM "t1" AS "t1"
+), "_q_1" AS (
+  SELECT
+    *
+  FROM "t2" AS "t2"
+)
+SELECT
+  *
+FROM (
+  "_q_0" AS "_q_0"
+    CROSS JOIN "_q_1" AS "_q_1"
+);
+
+# title: select * from wrapped join of subqueries (known schema)
+SELECT * FROM ((SELECT * FROM x) INNER JOIN (SELECT * FROM y) ON a = c);
+SELECT
+  "x"."a" AS "a",
+  "x"."b" AS "b",
+  "y"."b" AS "b",
+  "y"."c" AS "c"
+FROM (
+  "x" AS "x"
+    JOIN "y" AS "y"
+      ON "x"."a" = "y"."c"
+);
+
+# title: replace scalar subquery, wrap resulting column in a MAX
+SELECT a, SUM(c) / (SELECT SUM(c) FROM y) * 100 AS foo FROM y INNER JOIN x ON y.b = x.b GROUP BY a;
+WITH "_u_0" AS (
+  SELECT
+    SUM("y"."c") AS "_col_0"
+  FROM "y" AS "y"
+)
+SELECT
+  "x"."a" AS "a",
+  SUM("y"."c") / MAX("_u_0"."_col_0") * 100 AS "foo"
+FROM "y" AS "y"
+CROSS JOIN "_u_0" AS "_u_0"
+JOIN "x" AS "x"
+  ON "y"."b" = "x"."b"
+GROUP BY
+  "x"."a";
+
+# title: select * from a cte, which had one of its two columns aliased
+WITH cte(x, y) AS (SELECT 1, 2) SELECT * FROM cte AS cte(a);
+WITH "cte" AS (
+  SELECT
+    1 AS "x",
+    2 AS "y"
+)
+SELECT
+  "cte"."a" AS "a",
+  "cte"."y" AS "y"
+FROM "cte" AS "cte"("a");
+
+# title: select single column from a cte using its alias
+WITH cte(x) AS (SELECT 1) SELECT a FROM cte AS cte(a);
+WITH "cte" AS (
+  SELECT
+    1 AS "x"
+)
+SELECT
+  "cte"."a" AS "a"
+FROM "cte" AS "cte"("a");
+
+# title: joined ctes with a "using" clause, one of which has had its column aliased
+WITH m(a) AS (SELECT 1), n(b) AS (SELECT 1) SELECT * FROM m JOIN n AS foo(a) USING (a);
+WITH "m" AS (
+  SELECT
+    1 AS "a"
+), "n" AS (
+  SELECT
+    1 AS "b"
+)
+SELECT
+  COALESCE("m"."a", "foo"."a") AS "a"
+FROM "m"
+JOIN "n" AS "foo"("a")
+  ON "m"."a" = "foo"."a";
+
+# title: reduction of string concatenation that uses CONCAT(..), || and +
+# execute: false
+SELECT CONCAT('a', 'b') || CONCAT(CONCAT('c', 'd'), CONCAT('e', 'f')) + ('g' || 'h' || 'i');
+SELECT
+  'abcdefghi' AS "_col_0";
+
+# title: complex query with derived tables and redundant parentheses
+# execute: false
+# dialect: snowflake
+SELECT
+  ("SUBQUERY_0"."KEY") AS "SUBQUERY_1_COL_0"
+FROM
+  (
+    SELECT
+      *
+    FROM
+      (((
+          SELECT
+            *
+          FROM
+            (
+              SELECT
+                event_name AS key,
+                insert_ts
+              FROM
+                (
+                  SELECT
+                    insert_ts,
+                    event_name
+                  FROM
+                    sales
+                  WHERE
+                    insert_ts > '2023-08-07 21:03:35.590 -0700'
+                )
+            )
+      ))) AS "SF_CONNECTOR_QUERY_ALIAS"
+  ) AS "SUBQUERY_0";
+SELECT
+  "SALES"."EVENT_NAME" AS "SUBQUERY_1_COL_0"
+FROM "SALES" AS "SALES"
+WHERE
+  "SALES"."INSERT_TS" > '2023-08-07 21:03:35.590 -0700';
+
+# title: using join without select *
+# execute: false
+with
+    alias1 as (select * from table1),
+    alias2 as (select * from table2),
+    alias3 as (
+        select
+            cid,
+            min(od) as m_od,
+            count(odi) as c_od,
+        from alias2
+        group by 1
+    )
+select
+    alias1.cid,
+    alias3.m_od,
+    coalesce(alias3.c_od, 0) as c_od,
+from alias1
+left join alias3 using (cid);
+WITH "alias3" AS (
+  SELECT
+    "table2"."cid" AS "cid",
+    MIN("table2"."od") AS "m_od",
+    COUNT("table2"."odi") AS "c_od"
+  FROM "table2" AS "table2"
+  GROUP BY
+    "table2"."cid"
+)
+SELECT
+  "table1"."cid" AS "cid",
+  "alias3"."m_od" AS "m_od",
+  COALESCE("alias3"."c_od", 0) AS "c_od"
+FROM "table1" AS "table1"
+LEFT JOIN "alias3"
+  ON "table1"."cid" = "alias3"."cid";

@@ -59,7 +59,7 @@ def reorder_joins(expression):
         dag = {name: other_table_names(join) for name, join in joins.items()}
         parent.set(
             "joins",
-            [joins[name] for name in tsort(dag) if name != from_.alias_or_name],
+            [joins[name] for name in tsort(dag) if name != from_.alias_or_name and name in joins],
         )
     return expression
 
@@ -72,8 +72,13 @@ def normalize(expression):
         if not any(join.args.get(k) for k in JOIN_ATTRS):
             join.set("kind", "CROSS")
 
-        if join.kind != "CROSS":
+        if join.kind == "CROSS":
+            join.set("on", None)
+        else:
             join.set("kind", None)
+
+            if not join.args.get("on") and not join.args.get("using"):
+                join.set("on", exp.true())
     return expression
 
 

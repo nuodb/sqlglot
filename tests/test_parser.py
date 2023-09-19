@@ -1,3 +1,4 @@
+import time
 import unittest
 from unittest.mock import patch
 
@@ -67,7 +68,7 @@ class TestParser(unittest.TestCase):
             },
         ]
         with self.assertRaises(ParseError) as ctx:
-            parse_one("SELECT 1;", "sqlite", [exp.From, exp.Join])
+            parse_one("SELECT 1;", "sqlite", into=[exp.From, exp.Join])
 
         self.assertEqual(str(ctx.exception), expected_message)
         self.assertEqual(ctx.exception.errors, expected_errors)
@@ -216,7 +217,13 @@ class TestParser(unittest.TestCase):
             parse_one("IF(a > 0)")
 
         with self.assertRaises(ParseError):
+            parse_one("SELECT CASE FROM x")
+
+        with self.assertRaises(ParseError):
             parse_one("WITH cte AS (SELECT * FROM x)")
+
+        with self.assertRaises(ParseError):
+            parse_one("SELECT foo( FROM bar")
 
         self.assertEqual(
             parse_one(
@@ -252,7 +259,7 @@ class TestParser(unittest.TestCase):
         self.assertIsInstance(parse_one("INTERVAL '1' DAY").args["unit"], exp.Var)
         self.assertEqual(parse_one("SELECT @JOIN, @'foo'").sql(), "SELECT @JOIN, @'foo'")
 
-    def test_comments(self):
+    def test_comments_select(self):
         expression = parse_one(
             """
             --comment1.1
@@ -275,6 +282,120 @@ class TestParser(unittest.TestCase):
         self.assertEqual(expression.expressions[3].comments, ["comment4 --foo"])
         self.assertEqual(expression.expressions[4].comments, [""])
         self.assertEqual(expression.expressions[5].comments, [" space"])
+
+    def test_comments_select_cte(self):
+        expression = parse_one(
+            """
+            /*comment1.1*/
+            /*comment1.2*/
+            WITH a AS (SELECT 1)
+            SELECT /*comment2*/
+                a.*
+            FROM /*comment3*/
+                a
+        """
+        )
+
+        self.assertEqual(expression.comments, ["comment2"])
+        self.assertEqual(expression.args.get("from").comments, ["comment3"])
+        self.assertEqual(expression.args.get("with").comments, ["comment1.1", "comment1.2"])
+
+    def test_comments_insert(self):
+        expression = parse_one(
+            """
+            --comment1.1
+            --comment1.2
+            INSERT INTO /*comment1.3*/
+                x       /*comment2*/
+            VALUES      /*comment3*/
+                (1, 'a', 2.0)
+        """
+        )
+
+        self.assertEqual(expression.comments, ["comment1.1", "comment1.2", "comment1.3"])
+        self.assertEqual(expression.this.comments, ["comment2"])
+
+    def test_comments_insert_cte(self):
+        expression = parse_one(
+            """
+            /*comment1.1*/
+            /*comment1.2*/
+            WITH a AS (SELECT 1)
+            INSERT INTO /*comment2*/
+                b /*comment3*/
+            SELECT * FROM a
+        """
+        )
+
+        self.assertEqual(expression.comments, ["comment2"])
+        self.assertEqual(expression.this.comments, ["comment3"])
+        self.assertEqual(expression.args.get("with").comments, ["comment1.1", "comment1.2"])
+
+    def test_comments_update(self):
+        expression = parse_one(
+            """
+            --comment1.1
+            --comment1.2
+            UPDATE  /*comment1.3*/
+                tbl /*comment2*/
+            SET     /*comment3*/
+                x = 2
+            WHERE /*comment4*/
+                x <> 2
+        """
+        )
+
+        self.assertEqual(expression.comments, ["comment1.1", "comment1.2", "comment1.3"])
+        self.assertEqual(expression.this.comments, ["comment2"])
+        self.assertEqual(expression.args.get("where").comments, ["comment4"])
+
+    def test_comments_update_cte(self):
+        expression = parse_one(
+            """
+            /*comment1.1*/
+            /*comment1.2*/
+            WITH a AS (SELECT * FROM b)
+            UPDATE /*comment2*/
+                a  /*comment3*/
+            SET col = 1
+        """
+        )
+
+        self.assertEqual(expression.comments, ["comment2"])
+        self.assertEqual(expression.this.comments, ["comment3"])
+        self.assertEqual(expression.args.get("with").comments, ["comment1.1", "comment1.2"])
+
+    def test_comments_delete(self):
+        expression = parse_one(
+            """
+            --comment1.1
+            --comment1.2
+            DELETE /*comment1.3*/
+            FROM   /*comment2*/
+                x  /*comment3*/
+            WHERE  /*comment4*/
+                y > 1
+        """
+        )
+
+        self.assertEqual(expression.comments, ["comment1.1", "comment1.2", "comment1.3"])
+        self.assertEqual(expression.this.comments, ["comment3"])
+        self.assertEqual(expression.args.get("where").comments, ["comment4"])
+
+    def test_comments_delete_cte(self):
+        expression = parse_one(
+            """
+            /*comment1.1*/
+            /*comment1.2*/
+            WITH a AS (SELECT * FROM b)
+            --comment2
+            DELETE FROM a /*comment3*/
+        """
+        )
+
+        self.assertEqual(expression.comments, ["comment2"])
+        self.assertEqual(expression.this.comments, ["comment3"])
+        self.assertEqual(expression.args.get("with").comments, ["comment1.1", "comment1.2"])
 
     def test_type_literals(self):
         self.assertEqual(parse_one("int 1"), parse_one("CAST(1 AS INT)"))
@@ -312,12 +433,13 @@ class TestParser(unittest.TestCase):
         self.assertEqual(parse_one("TIMESTAMP(1) WITH TIME ZONE").sql(), "TIMESTAMPTZ(1)")
         self.assertEqual(parse_one("TIMESTAMP(1) WITH LOCAL TIME ZONE").sql(), "TIMESTAMPLTZ(1)")
         self.assertEqual(parse_one("TIMESTAMP(1) WITHOUT TIME ZONE").sql(), "TIMESTAMP(1)")
-        self.assertEqual(parse_one("""JSON '{"x":"y"}'""").sql(), """CAST('{"x":"y"}' AS JSON)""")
+        self.assertEqual(parse_one("""JSON '{"x":"y"}'""").sql(), """PARSE_JSON('{"x":"y"}')""")
         self.assertIsInstance(parse_one("TIMESTAMP(1)"), exp.Func)
         self.assertIsInstance(parse_one("TIMESTAMP('2022-01-01')"), exp.Func)
         self.assertIsInstance(parse_one("TIMESTAMP()"), exp.Func)
         self.assertIsInstance(parse_one("map.x"), exp.Column)
-        self.assertIsInstance(parse_one("CAST(x AS CHAR(5))").to.expressions[0], exp.DataTypeSize)
+        self.assertIsInstance(parse_one("CAST(x AS CHAR(5))").to.expressions[0], exp.DataTypeParam)
+        self.assertEqual(parse_one("1::int64", dialect="bigquery"), parse_one("CAST(1 AS BIGINT)"))
 
     def test_set_expression(self):
         set_ = parse_one("SET")
@@ -522,6 +644,55 @@ class TestParser(unittest.TestCase):
                 columns = expr.args["from"].this.args["pivots"][0].args["columns"]
                 self.assertEqual(expected_columns, [col.sql(dialect=dialect) for col in columns])
 
+    def test_parse_nested(self):
+        now = time.time()
+        query = parse_one(
+            """
+            SELECT *
+            FROM a
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            LEFT JOIN b ON a.id = b.id
+            """
+        )
+        self.assertIsNotNone(query)
+        self.assertLessEqual(time.time() - now, 0.2)
+
     def test_parse_properties(self):
         self.assertEqual(
             parse_one("create materialized table x").sql(), "CREATE MATERIALIZED TABLE x"
@@ -529,3 +700,37 @@ class TestParser(unittest.TestCase):
 
     def test_parse_floats(self):
         self.assertTrue(parse_one("1. ").is_number)
+
+    def test_parse_terse_coalesce(self):
+        self.assertIsNotNone(parse_one("SELECT x ?? y FROM z").find(exp.Coalesce))
+        self.assertEqual(
+            parse_one("SELECT a, b ?? 'No Data' FROM z").sql(),
+            "SELECT a, COALESCE(b, 'No Data') FROM z",
+        )
+        self.assertEqual(
+            parse_one("SELECT a, b ?? c ?? 'No Data' FROM z").sql(),
+            "SELECT a, COALESCE(COALESCE(b, c), 'No Data') FROM z",
+        )
+
+    def test_parse_intervals(self):
+        ast = parse_one(
+            "SELECT a FROM tbl WHERE a <= DATE '1998-12-01' - INTERVAL '71 days' GROUP BY b"
+        )
+
+        self.assertEqual(ast.find(exp.Interval).this.sql(), "'71'")
+        self.assertEqual(ast.find(exp.Interval).unit.assert_is(exp.Var).sql(), "days")
+
+    def test_parse_concat_ws(self):
+        ast = parse_one("CONCAT_WS(' ', 'John', 'Doe')")
+
+        self.assertEqual(ast.sql(), "CONCAT_WS(' ', 'John', 'Doe')")
+        self.assertEqual(ast.expressions[0].sql(), "' '")
+        self.assertEqual(ast.expressions[1].sql(), "'John'")
+        self.assertEqual(ast.expressions[2].sql(), "'Doe'")
+
+        # Ensure we can parse without argument when error level is ignore
+        ast = parse(
+            "CONCAT_WS()",
+            error_level=ErrorLevel.IGNORE,
+        )
+        self.assertEqual(ast[0].sql(), "CONCAT_WS()")

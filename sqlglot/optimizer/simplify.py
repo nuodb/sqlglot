@@ -8,6 +8,9 @@ from sqlglot import exp
 from sqlglot.generator import cached_generator
 from sqlglot.helper import first, while_changing
 
+# Final means that an expression should not be simplified
+FINAL = "final"
+
 
 def simplify(expression):
     """
@@ -27,21 +30,53 @@ def simplify(expression):
 
     generate = cached_generator()
 
+    # group by expressions cannot be simplified, for example
+    # select x + 1 + 1 FROM y GROUP BY x + 1 + 1
+    # the projection must exactly match the group by key
+    for group in expression.find_all(exp.Group):
+        select = group.parent
+        groups = set(group.expressions)
+        group.meta[FINAL] = True
+
+        for e in select.selects:
+            for node, *_ in e.walk():
+                if node in groups:
+                    e.meta[FINAL] = True
+                    break
+
+        having = select.args.get("having")
+        if having:
+            for node, *_ in having.walk():
+                if node in groups:
+                    having.meta[FINAL] = True
+                    break
+
     def _simplify(expression, root=True):
+        if expression.meta.get(FINAL):
+            return expression
+
+        # Pre-order transformations
         node = expression
         node = rewrite_between(node)
         node = uniq_sort(node, generate, root)
         node = absorb_and_eliminate(node, root)
+        node = simplify_concat(node)
+
         exp.replace_children(node, lambda e: _simplify(e, False))
+
+        # Post-order transformations
         node = simplify_not(node)
         node = flatten(node)
         node = simplify_connectors(node, root)
         node = remove_compliments(node, root)
+        node = simplify_coalesce(node)
         node.parent = expression.parent
         node = simplify_literals(node, root)
         node = simplify_parens(node)
+
         if root:
             expression.replace(node)
+
         return node
 
     expression = while_changing(expression, _simplify)
@@ -158,6 +193,7 @@ COMPARISONS = (
     *GT_GTE,
     exp.EQ,
     exp.NEQ,
+    exp.Is,
 )
 
 INVERSE_COMPARISONS = {
@@ -314,7 +350,8 @@ def absorb_and_eliminate(expression, root=True):
 def simplify_literals(expression, root=True):
     if isinstance(expression, exp.Binary) and not isinstance(expression, exp.Connector):
         return _flat_simplify(expression, _simplify_binary, root)
-    elif isinstance(expression, exp.Neg):
+
+    if isinstance(expression, exp.Neg):
         this = expression.this
         if this.is_number:
             value = this.name
@@ -394,13 +431,114 @@ def simplify_parens(expression):
 
     if not isinstance(this, exp.Select) and (
         not isinstance(parent, (exp.Condition, exp.Binary))
-        or isinstance(this, exp.Predicate)
+        or isinstance(parent, exp.Paren)
         or not isinstance(this, exp.Binary)
+        or (isinstance(this, exp.Predicate) and not isinstance(parent, exp.Predicate))
         or (isinstance(this, exp.Add) and isinstance(parent, exp.Add))
         or (isinstance(this, exp.Mul) and isinstance(parent, exp.Mul))
+        or (isinstance(this, exp.Mul) and isinstance(parent, (exp.Add, exp.Sub)))
+    ):
+        return this
+    return expression
+
+
+CONSTANTS = (
+    exp.Literal,
+    exp.Boolean,
+    exp.Null,
+)
+
+
+def simplify_coalesce(expression):
+    # COALESCE(x) -> x
+    if (
+        isinstance(expression, exp.Coalesce)
+        and not expression.expressions
+        # COALESCE is also used as a Spark partitioning hint
+        and not isinstance(expression.parent, exp.Hint)
     ):
         return expression.this
-    return expression
+
+    if not isinstance(expression, COMPARISONS):
+        return expression
+
+    if isinstance(expression.left, exp.Coalesce):
+        coalesce = expression.left
+        other = expression.right
+    elif isinstance(expression.right, exp.Coalesce):
+        coalesce = expression.right
+        other = expression.left
+    else:
+        return expression
+
+    # This transformation is valid for non-constants,
+    # but it really only does anything if they are both constants.
+    if not isinstance(other, CONSTANTS):
+        return expression
+
+    # Find the first constant arg
+    for arg_index, arg in enumerate(coalesce.expressions):
+        if isinstance(arg, CONSTANTS):
+            break
+    else:
+        return expression
+
+    coalesce.set("expressions", coalesce.expressions[:arg_index])
+
+    # Remove the COALESCE function. This is an optimization, skipping a simplify iteration,
+    # since we already remove COALESCE at the top of this function.
+    coalesce = coalesce if coalesce.expressions else coalesce.this
+
+    # This expression is more complex than when we started, but it will get simplified further
+    return exp.paren(
+        exp.or_(
+            exp.and_(
+                coalesce.is_(exp.null()).not_(copy=False),
+                expression.copy(),
+                copy=False,
+            ),
+            exp.and_(
+                coalesce.is_(exp.null()),
+                type(expression)(this=arg.copy(), expression=other.copy()),
+                copy=False,
+            ),
+            copy=False,
+        )
+    )
+
+
+CONCATS = (exp.Concat, exp.DPipe)
+SAFE_CONCATS = (exp.SafeConcat, exp.SafeDPipe)
+
+
+def simplify_concat(expression):
+    """Reduces all groups that contain string literals by concatenating them."""
+    if not isinstance(expression, CONCATS) or isinstance(expression, exp.ConcatWs):
+        return expression
+
+    new_args = []
+    for is_string_group, group in itertools.groupby(
+        expression.expressions or expression.flatten(), lambda e: e.is_string
+    ):
+        if is_string_group:
+            new_args.append(exp.Literal.string("".join(string.name for string in group)))
+        else:
+            new_args.extend(group)
+
+    # Ensures we preserve the right concat type, i.e. whether it's "safe" or not
+    concat_type = exp.SafeConcat if isinstance(expression, SAFE_CONCATS) else exp.Concat
+    return new_args[0] if len(new_args) == 1 else concat_type(expressions=new_args)
+
+
+# CROSS joins result in an empty table if the right table is empty.
+# So we can only simplify certain types of joins to CROSS.
+# Or in other words, LEFT JOIN x ON TRUE != CROSS JOIN x
+JOINS = {
+    ("", ""),
+    ("", "INNER"),
+    ("RIGHT", ""),
+    ("RIGHT", "OUTER"),
+}
 
 
 def remove_where_true(expression):
@@ -412,6 +550,7 @@ def remove_where_true(expression):
             always_true(join.args.get("on"))
             and not join.args.get("using")
             and not join.args.get("method")
+            and (join.side, join.kind) in JOINS
         ):
             join.set("on", None)
             join.set("side", None)
@@ -507,7 +646,7 @@ def _flat_simplify(expression, simplifier, root=True):
             for b in queue:
                 result = simplifier(expression, a, b)
 
-                if result:
+                if result and result is not expression:
                     queue.remove(b)
                     queue.appendleft(result)
                     break

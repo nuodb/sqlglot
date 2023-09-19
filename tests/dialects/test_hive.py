@@ -7,28 +7,57 @@ class TestHive(Validator):
     def test_bits(self):
         self.validate_all(
             "x & 1",
-            write={
+            read={
                 "duckdb": "x & 1",
                 "presto": "BITWISE_AND(x, 1)",
+                "spark": "x & 1",
+            },
+            write={
+                "duckdb": "x & 1",
                 "hive": "x & 1",
+                "presto": "BITWISE_AND(x, 1)",
                 "spark": "x & 1",
             },
         )
         self.validate_all(
-            "~x",
+            "x & 1 > 0",
+            read={
+                "duckdb": "x & 1 > 0",
+                "presto": "BITWISE_AND(x, 1) > 0",
+                "spark": "x & 1 > 0",
+            },
             write={
+                "duckdb": "x & 1 > 0",
+                "presto": "BITWISE_AND(x, 1) > 0",
+                "hive": "x & 1 > 0",
+                "spark": "x & 1 > 0",
+            },
+        )
+        self.validate_all(
+            "~x",
+            read={
                 "duckdb": "~x",
                 "presto": "BITWISE_NOT(x)",
+                "spark": "~x",
+            },
+            write={
+                "duckdb": "~x",
                 "hive": "~x",
+                "presto": "BITWISE_NOT(x)",
                 "spark": "~x",
             },
         )
         self.validate_all(
             "x | 1",
-            write={
+            read={
                 "duckdb": "x | 1",
                 "presto": "BITWISE_OR(x, 1)",
+                "spark": "x | 1",
+            },
+            write={
+                "duckdb": "x | 1",
                 "hive": "x | 1",
+                "presto": "BITWISE_OR(x, 1)",
                 "spark": "x | 1",
             },
         )
@@ -56,15 +85,6 @@ class TestHive(Validator):
                 "spark": "SHIFTRIGHT(x, 1)",
             },
         )
-        self.validate_all(
-            "x & 1 > 0",
-            write={
-                "duckdb": "x & 1 > 0",
-                "presto": "BITWISE_AND(x, 1) > 0",
-                "hive": "x & 1 > 0",
-                "spark": "x & 1 > 0",
-            },
-        )
 
     def test_cast(self):
         self.validate_all(
@@ -73,7 +93,7 @@ class TestHive(Validator):
                 "duckdb": "TRY_CAST(1 AS SMALLINT)",
                 "presto": "TRY_CAST(1 AS SMALLINT)",
                 "hive": "CAST(1 AS SMALLINT)",
-                "spark": "CAST(1 AS SHORT)",
+                "spark": "CAST(1 AS SMALLINT)",
             },
         )
         self.validate_all(
@@ -82,7 +102,7 @@ class TestHive(Validator):
                 "duckdb": "TRY_CAST(1 AS SMALLINT)",
                 "presto": "TRY_CAST(1 AS SMALLINT)",
                 "hive": "CAST(1 AS SMALLINT)",
-                "spark": "CAST(1 AS SHORT)",
+                "spark": "CAST(1 AS SMALLINT)",
             },
         )
         self.validate_all(
@@ -91,7 +111,7 @@ class TestHive(Validator):
                 "duckdb": "TRY_CAST(1 AS TINYINT)",
                 "presto": "TRY_CAST(1 AS TINYINT)",
                 "hive": "CAST(1 AS TINYINT)",
-                "spark": "CAST(1 AS BYTE)",
+                "spark": "CAST(1 AS TINYINT)",
             },
         )
         self.validate_all(
@@ -100,7 +120,7 @@ class TestHive(Validator):
                 "duckdb": "TRY_CAST(1 AS BIGINT)",
                 "presto": "TRY_CAST(1 AS BIGINT)",
                 "hive": "CAST(1 AS BIGINT)",
-                "spark": "CAST(1 AS LONG)",
+                "spark": "CAST(1 AS BIGINT)",
             },
         )
         self.validate_all(
@@ -362,14 +382,22 @@ class TestHive(Validator):
         self.validate_all(
             "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname",
             write={
-                "duckdb": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname, lname NULLS FIRST",
-                "presto": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname, lname NULLS FIRST",
-                "hive": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname NULLS LAST, lname",
-                "spark": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname NULLS LAST, lname",
+                "duckdb": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC, lname NULLS FIRST",
+                "presto": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC, lname NULLS FIRST",
+                "hive": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname",
+                "spark": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname",
             },
         )
 
     def test_hive(self):
+        self.validate_identity("SELECT * FROM my_table TIMESTAMP AS OF DATE_ADD(CURRENT_DATE, -1)")
+        self.validate_identity("SELECT * FROM my_table VERSION AS OF DATE_ADD(CURRENT_DATE, -1)")
+
+        self.validate_identity(
+            "SELECT ROW() OVER (DISTRIBUTE BY x SORT BY y)",
+            "SELECT ROW() OVER (PARTITION BY x ORDER BY y)",
+        )
+        self.validate_identity("SELECT transform")
         self.validate_identity("SELECT * FROM test DISTRIBUTE BY y SORT BY x DESC ORDER BY l")
         self.validate_identity(
             "SELECT * FROM test WHERE RAND() <= 0.1 DISTRIBUTE BY RAND() SORT BY RAND()"
@@ -570,7 +598,7 @@ class TestHive(Validator):
             read={
                 "": "VAR_MAP(a, b, c, d)",
                 "clickhouse": "map(a, b, c, d)",
-                "duckdb": "MAP(LIST_VALUE(a, c), LIST_VALUE(b, d))",
+                "duckdb": "MAP([a, c], [b, d])",
                 "hive": "MAP(a, b, c, d)",
                 "presto": "MAP(ARRAY[a, c], ARRAY[b, d])",
                 "spark": "MAP(a, b, c, d)",
@@ -578,7 +606,7 @@ class TestHive(Validator):
             write={
                 "": "MAP(ARRAY(a, c), ARRAY(b, d))",
                 "clickhouse": "map(a, b, c, d)",
-                "duckdb": "MAP(LIST_VALUE(a, c), LIST_VALUE(b, d))",
+                "duckdb": "MAP([a, c], [b, d])",
                 "presto": "MAP(ARRAY[a, c], ARRAY[b, d])",
                 "hive": "MAP(a, b, c, d)",
                 "spark": "MAP(a, b, c, d)",
@@ -588,7 +616,7 @@ class TestHive(Validator):
         self.validate_all(
             "MAP(a, b)",
             write={
-                "duckdb": "MAP(LIST_VALUE(a), LIST_VALUE(b))",
+                "duckdb": "MAP([a], [b])",
                 "presto": "MAP(ARRAY[a], ARRAY[b])",
                 "hive": "MAP(a, b)",
                 "spark": "MAP(a, b)",
@@ -696,9 +724,7 @@ class TestHive(Validator):
         self.validate_identity("'\\\\n'")
         self.validate_identity("''")
         self.validate_identity("'\\\\'")
-        self.validate_identity("'\z'")
         self.validate_identity("'\\z'")
-        self.validate_identity("'\\\z'")
         self.validate_identity("'\\\\z'")
 
     def test_data_type(self):

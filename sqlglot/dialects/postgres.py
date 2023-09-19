@@ -5,17 +5,22 @@ import typing as t
 from sqlglot import exp, generator, parser, tokens, transforms
 from sqlglot.dialects.dialect import (
     Dialect,
+    any_value_to_max_sql,
     arrow_json_extract_scalar_sql,
     arrow_json_extract_sql,
+    bool_xor_sql,
     datestrtodate_sql,
     format_time_lambda,
     max_or_greatest,
     min_or_least,
+    no_map_from_entries_sql,
     no_paren_current_date_sql,
     no_pivot_sql,
     no_tablesample_sql,
     no_trycast_sql,
+    parse_timestamp_trunc,
     rename_func,
+    simplify_literal,
     str_position_sql,
     timestamptrunc_sql,
     timestrtotime_sql,
@@ -36,25 +41,24 @@ DATE_DIFF_FACTOR = {
 }
 
 
-def _date_add_sql(kind: str) -> t.Callable[[generator.Generator, exp.DateAdd | exp.DateSub], str]:
-    def func(self: generator.Generator, expression: exp.DateAdd | exp.DateSub) -> str:
-        from sqlglot.optimizer.simplify import simplify
+def _date_add_sql(kind: str) -> t.Callable[[Postgres.Generator, exp.DateAdd | exp.DateSub], str]:
+    def func(self: Postgres.Generator, expression: exp.DateAdd | exp.DateSub) -> str:
+        expression = expression.copy()
 
         this = self.sql(expression, "this")
         unit = expression.args.get("unit")
-        expression = simplify(expression.args["expression"])
 
+        expression = simplify_literal(expression).expression
         if not isinstance(expression, exp.Literal):
             self.unsupported("Cannot add non literal")
 
-        expression = expression.copy()
         expression.args["is_string"] = True
         return f"{this} {kind} {self.sql(exp.Interval(this=expression, unit=unit))}"
 
     return func
 
 
-def _date_diff_sql(self: generator.Generator, expression: exp.DateDiff) -> str:
+def _date_diff_sql(self: Postgres.Generator, expression: exp.DateDiff) -> str:
     unit = expression.text("unit").upper()
     factor = DATE_DIFF_FACTOR.get(unit)
 
@@ -80,7 +84,7 @@ def _date_diff_sql(self: generator.Generator, expression: exp.DateDiff) -> str:
     return f"CAST({unit} AS BIGINT)"
 
 
-def _substring_sql(self: generator.Generator, expression: exp.Substring) -> str:
+def _substring_sql(self: Postgres.Generator, expression: exp.Substring) -> str:
     this = self.sql(expression, "this")
     start = self.sql(expression, "start")
     length = self.sql(expression, "length")
@@ -91,7 +95,7 @@ def _substring_sql(self: generator.Generator, expression: exp.Substring) -> str:
     return f"SUBSTRING({this}{from_part}{for_part})"
 
 
-def _string_agg_sql(self: generator.Generator, expression: exp.GroupConcat) -> str:
+def _string_agg_sql(self: Postgres.Generator, expression: exp.GroupConcat) -> str:
     expression = expression.copy()
     separator = expression.args.get("separator") or exp.Literal.string(",")
 
@@ -105,7 +109,7 @@ def _string_agg_sql(self: generator.Generator, expression: exp.GroupConcat) -> s
     return f"STRING_AGG({self.format_args(this, separator)}{order})"
 
 
-def _datatype_sql(self: generator.Generator, expression: exp.DataType) -> str:
+def _datatype_sql(self: Postgres.Generator, expression: exp.DataType) -> str:
     if expression.is_type("array"):
         return f"{self.expressions(expression, flat=True)}[]"
     return self.datatype_sql(expression)
@@ -182,6 +186,33 @@ def _to_timestamp(args: t.List) -> exp.Expression:
     return format_time_lambda(exp.StrToTime, "postgres")(args)
 
 
+def _remove_target_from_merge(expression: exp.Expression) -> exp.Expression:
+    """Remove table refs from columns in when statements."""
+    if isinstance(expression, exp.Merge):
+        alias = expression.this.args.get("alias")
+
+        normalize = (
+            lambda identifier: Postgres.normalize_identifier(identifier).name
+            if identifier
+            else None
+        )
+
+        targets = {normalize(expression.this.this)}
+
+        if alias:
+            targets.add(normalize(alias.this))
+
+        for when in expression.expressions:
+            when.transform(
+                lambda node: exp.column(node.name)
+                if isinstance(node, exp.Column) and normalize(node.args.get("table")) in targets
+                else node,
+                copy=False,
+            )
+
+    return expression
+
+
 class Postgres(Dialect):
     INDEX_OFFSET = 1
     NULL_ORDERING = "nulls_are_large"
@@ -229,6 +260,7 @@ class Postgres(Dialect):
             "~~*": TokenType.ILIKE,
             "~*": TokenType.IRLIKE,
             "~": TokenType.RLIKE,
+            "@@": TokenType.DAT,
             "@>": TokenType.AT_GT,
             "<@": TokenType.LT_AT,
             "BEGIN": TokenType.COMMAND,
@@ -239,6 +271,7 @@ class Postgres(Dialect):
             "DO": TokenType.COMMAND,
             "HSTORE": TokenType.HSTORE,
             "JSONB": TokenType.JSONB,
+            "MONEY": TokenType.MONEY,
             "REFRESH": TokenType.COMMAND,
             "REINDEX": TokenType.COMMAND,
             "RESET": TokenType.COMMAND,
@@ -247,6 +280,18 @@ class Postgres(Dialect):
             "SMALLSERIAL": TokenType.SMALLSERIAL,
             "TEMP": TokenType.TEMPORARY,
             "CSTRING": TokenType.PSEUDO_TYPE,
+            "OID": TokenType.OBJECT_IDENTIFIER,
+            "REGCLASS": TokenType.OBJECT_IDENTIFIER,
+            "REGCOLLATION": TokenType.OBJECT_IDENTIFIER,
+            "REGCONFIG": TokenType.OBJECT_IDENTIFIER,
+            "REGDICTIONARY": TokenType.OBJECT_IDENTIFIER,
+            "REGNAMESPACE": TokenType.OBJECT_IDENTIFIER,
+            "REGOPER": TokenType.OBJECT_IDENTIFIER,
+            "REGOPERATOR": TokenType.OBJECT_IDENTIFIER,
+            "REGPROC": TokenType.OBJECT_IDENTIFIER,
+            "REGPROCEDURE": TokenType.OBJECT_IDENTIFIER,
+            "REGROLE": TokenType.OBJECT_IDENTIFIER,
+            "REGTYPE": TokenType.OBJECT_IDENTIFIER,
         }
 
         SINGLE_TOKENS = {
@@ -257,14 +302,11 @@ class Postgres(Dialect):
         VAR_SINGLE_TOKENS = {"$"}
 
     class Parser(parser.Parser):
-        STRICT_CAST = False
         CONCAT_NULL_OUTPUTS_STRING = True
 
         FUNCTIONS = {
             **parser.Parser.FUNCTIONS,
-            "DATE_TRUNC": lambda args: exp.TimestampTrunc(
-                this=seq_get(args, 1), unit=seq_get(args, 0)
-            ),
+            "DATE_TRUNC": parse_timestamp_trunc,
             "GENERATE_SERIES": _generate_series,
             "NOW": exp.CurrentTimestamp.from_arg_list,
             "TO_CHAR": format_time_lambda(exp.TimeToStr, "postgres"),
@@ -289,8 +331,16 @@ class Postgres(Dialect):
         RANGE_PARSERS = {
             **parser.Parser.RANGE_PARSERS,
             TokenType.DAMP: binary_range_parser(exp.ArrayOverlaps),
+            TokenType.DAT: lambda self, this: self.expression(
+                exp.MatchAgainst, this=self._parse_bitwise(), expressions=[this]
+            ),
             TokenType.AT_GT: binary_range_parser(exp.ArrayContains),
             TokenType.LT_AT: binary_range_parser(exp.ArrayContained),
+        }
+
+        STATEMENT_PARSERS = {
+            **parser.Parser.STATEMENT_PARSERS,
+            TokenType.END: lambda self: self._parse_commit_or_rollback(),
         }
 
         def _parse_factor(self) -> t.Optional[exp.Expression]:
@@ -314,6 +364,8 @@ class Postgres(Dialect):
         LOCKING_READS_SUPPORTED = True
         JOIN_HINTS = False
         TABLE_HINTS = False
+        QUERY_HINTS = False
+        NVL2_SUPPORTED = False
         PARAMETER_TOKEN = "$"
 
         TYPE_MAPPING = {
@@ -328,32 +380,47 @@ class Postgres(Dialect):
 
         TRANSFORMS = {
             **generator.Generator.TRANSFORMS,
+            exp.AnyValue: any_value_to_max_sql,
+            exp.Array: lambda self, e: f"{self.normalize_func('ARRAY')}({self.sql(e.expressions[0])})"
+            if isinstance(seq_get(e.expressions, 0), exp.Select)
+            else f"{self.normalize_func('ARRAY')}[{self.expressions(e, flat=True)}]",
+            exp.ArrayConcat: rename_func("ARRAY_CAT"),
+            exp.ArrayContained: lambda self, e: self.binary(e, "<@"),
+            exp.ArrayContains: lambda self, e: self.binary(e, "@>"),
+            exp.ArrayOverlaps: lambda self, e: self.binary(e, "&&"),
             exp.BitwiseXor: lambda self, e: self.binary(e, "#"),
             exp.ColumnDef: transforms.preprocess([_auto_increment_to_serial, _serial_to_generated]),
+            exp.CurrentDate: no_paren_current_date_sql,
+            exp.CurrentTimestamp: lambda *_: "CURRENT_TIMESTAMP",
+            exp.DateAdd: _date_add_sql("+"),
+            exp.DateDiff: _date_diff_sql,
+            exp.DateStrToDate: datestrtodate_sql,
+            exp.DataType: _datatype_sql,
+            exp.DateSub: _date_add_sql("-"),
             exp.Explode: rename_func("UNNEST"),
+            exp.GroupConcat: _string_agg_sql,
             exp.JSONExtract: arrow_json_extract_sql,
             exp.JSONExtractScalar: arrow_json_extract_scalar_sql,
             exp.JSONBExtract: lambda self, e: self.binary(e, "#>"),
             exp.JSONBExtractScalar: lambda self, e: self.binary(e, "#>>"),
             exp.JSONBContains: lambda self, e: self.binary(e, "?"),
-            exp.Pow: lambda self, e: self.binary(e, "^"),
-            exp.CurrentDate: no_paren_current_date_sql,
-            exp.CurrentTimestamp: lambda *_: "CURRENT_TIMESTAMP",
-            exp.DateAdd: _date_add_sql("+"),
-            exp.DateStrToDate: datestrtodate_sql,
-            exp.DateSub: _date_add_sql("-"),
-            exp.DateDiff: _date_diff_sql,
             exp.LogicalOr: rename_func("BOOL_OR"),
             exp.LogicalAnd: rename_func("BOOL_AND"),
             exp.Max: max_or_greatest,
+            exp.MapFromEntries: no_map_from_entries_sql,
             exp.Min: min_or_least,
-            exp.ArrayOverlaps: lambda self, e: self.binary(e, "&&"),
-            exp.ArrayContains: lambda self, e: self.binary(e, "@>"),
-            exp.ArrayContained: lambda self, e: self.binary(e, "<@"),
-            exp.Merge: transforms.preprocess([transforms.remove_target_from_merge]),
+            exp.Merge: transforms.preprocess([_remove_target_from_merge]),
+            exp.PercentileCont: transforms.preprocess(
+                [transforms.add_within_group_for_percentiles]
+            ),
+            exp.PercentileDisc: transforms.preprocess(
+                [transforms.add_within_group_for_percentiles]
+            ),
             exp.Pivot: no_pivot_sql,
+            exp.Pow: lambda self, e: self.binary(e, "^"),
             exp.RegexpLike: lambda self, e: self.binary(e, "~"),
             exp.RegexpILike: lambda self, e: self.binary(e, "~*"),
+            exp.Select: transforms.preprocess([transforms.eliminate_semi_and_anti_joins]),
             exp.StrPosition: str_position_sql,
             exp.StrToTime: lambda self, e: f"TO_TIMESTAMP({self.sql(e, 'this')}, {self.format_time(e)})",
             exp.Substring: _substring_sql,
@@ -366,11 +433,7 @@ class Postgres(Dialect):
             exp.TryCast: no_trycast_sql,
             exp.TsOrDsToDate: ts_or_ds_to_date_sql("postgres"),
             exp.UnixToTime: lambda self, e: f"TO_TIMESTAMP({self.sql(e, 'this')})",
-            exp.DataType: _datatype_sql,
-            exp.GroupConcat: _string_agg_sql,
-            exp.Array: lambda self, e: f"{self.normalize_func('ARRAY')}({self.sql(e.expressions[0])})"
-            if isinstance(seq_get(e.expressions, 0), exp.Select)
-            else f"{self.normalize_func('ARRAY')}[{self.expressions(e, flat=True)}]",
+            exp.Xor: bool_xor_sql,
         }
 
         PROPERTIES_LOCATION = {
@@ -378,3 +441,17 @@ class Postgres(Dialect):
             exp.TransientProperty: exp.Properties.Location.UNSUPPORTED,
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
         }
+
+        def bracket_sql(self, expression: exp.Bracket) -> str:
+            """Forms like ARRAY[1, 2, 3][3] aren't allowed; we need to wrap the ARRAY."""
+            if isinstance(expression.this, exp.Array):
+                expression = expression.copy()
+                expression.set("this", exp.paren(expression.this, copy=False))
+
+            return super().bracket_sql(expression)
+
+        def matchagainst_sql(self, expression: exp.MatchAgainst) -> str:
+            this = self.sql(expression, "this")
+            expressions = [f"{self.sql(e)} @@ {this}" for e in expression.expressions]
+            sql = " OR ".join(expressions)
+            return f"({sql})" if len(expressions) > 1 else sql

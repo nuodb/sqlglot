@@ -9,6 +9,7 @@ from sqlglot.dialects.dialect import Dialect, DialectType
 from sqlglot.errors import OptimizeError
 from sqlglot.helper import seq_get
 from sqlglot.optimizer.scope import Scope, traverse_scope, walk_in_scope
+from sqlglot.optimizer.simplify import simplify_parens
 from sqlglot.schema import Schema, ensure_schema
 
 
@@ -29,15 +30,17 @@ def qualify_columns(
         'SELECT tbl.col AS col FROM tbl'
 
     Args:
-        expression: expression to qualify
-        schema: Database schema
-        expand_alias_refs: whether or not to expand references to aliases
-        infer_schema: whether or not to infer the schema if missing
+        expression: Expression to qualify.
+        schema: Database schema.
+        expand_alias_refs: Whether or not to expand references to aliases.
+        infer_schema: Whether or not to infer the schema if missing.
+
     Returns:
-        sqlglot.Expression: qualified expression
+        The qualified expression.
     """
     schema = ensure_schema(schema)
     infer_schema = schema.empty if infer_schema is None else infer_schema
+    pseudocolumns = Dialect.get_or_raise(schema.dialect).PSEUDOCOLUMNS
 
     for scope in traverse_scope(expression):
         resolver = Resolver(scope, schema, infer_schema=infer_schema)
@@ -54,15 +57,16 @@ def qualify_columns(
             _expand_alias_refs(scope, resolver)
 
         if not isinstance(scope.expression, exp.UDTF):
-            _expand_stars(scope, resolver, using_column_tables)
+            _expand_stars(scope, resolver, using_column_tables, pseudocolumns)
             _qualify_outputs(scope)
-        _expand_group_by(scope, resolver)
-        _expand_order_by(scope)
+
+        _expand_group_by(scope)
+        _expand_order_by(scope, resolver)
 
     return expression
 
 
-def validate_qualify_columns(expression):
+def validate_qualify_columns(expression: E) -> E:
     """Raise an `OptimizeError` if any columns aren't qualified"""
     unqualified_columns = []
     for scope in traverse_scope(expression):
@@ -79,11 +83,11 @@ def validate_qualify_columns(expression):
     return expression
 
 
-def _pop_table_column_aliases(derived_tables):
+def _pop_table_column_aliases(derived_tables: t.List[exp.CTE | exp.Subquery]) -> None:
     """
     Remove table column aliases.
 
-    (e.g. SELECT ... FROM (SELECT ...) AS foo(col1, col2)
+    For example, `col1` and `col2` will be dropped in SELECT ... FROM (SELECT ...) AS foo(col1, col2)
     """
     for derived_table in derived_tables:
         table_alias = derived_table.args.get("alias")
@@ -91,13 +95,13 @@ def _pop_table_column_aliases(derived_tables):
             table_alias.args.pop("columns", None)
 
 
-def _expand_using(scope, resolver):
+def _expand_using(scope: Scope, resolver: Resolver) -> t.Dict[str, t.Any]:
     joins = list(scope.find_all(exp.Join))
     names = {join.alias_or_name for join in joins}
     ordered = [key for key in scope.selected_sources if key not in names]
 
     # Mapping of automatically joined column names to an ordered set of source names (dict).
-    column_tables = {}
+    column_tables: t.Dict[str, t.Dict[str, t.Any]] = {}
 
     for join in joins:
         using = join.args.get("using")
@@ -109,11 +113,11 @@ def _expand_using(scope, resolver):
 
         columns = {}
 
-        for k in scope.selected_sources:
-            if k in ordered:
-                for column in resolver.get_source_columns(k):
-                    if column not in columns:
-                        columns[column] = k
+        for source_name in scope.selected_sources:
+            if source_name in ordered:
+                for column_name in resolver.get_source_columns(source_name):
+                    if column_name not in columns:
+                        columns[column_name] = source_name
 
         source_table = ordered[-1]
         ordered.append(join_table)
@@ -125,7 +129,7 @@ def _expand_using(scope, resolver):
             table = columns.get(identifier)
 
             if not table or identifier not in join_columns:
-                if columns and join_columns:
+                if (columns and "*" not in columns) and join_columns:
                     raise OptimizeError(f"Cannot automatically join: {identifier}")
 
             table = table or source_table
@@ -170,47 +174,62 @@ def _expand_alias_refs(scope: Scope, resolver: Resolver) -> None:
     if not isinstance(expression, exp.Select):
         return
 
-    alias_to_expression: t.Dict[str, exp.Expression] = {}
+    alias_to_expression: t.Dict[str, t.Tuple[exp.Expression, int]] = {}
 
     def replace_columns(
-        node: t.Optional[exp.Expression], expand: bool = True, resolve_agg: bool = False
-    ):
+        node: t.Optional[exp.Expression], resolve_table: bool = False, literal_index: bool = False
+    ) -> None:
         if not node:
             return
 
         for column, *_ in walk_in_scope(node):
             if not isinstance(column, exp.Column):
                 continue
-            table = resolver.get_table(column.name) if resolve_agg and not column.table else None
-            if table and column.find_ancestor(exp.AggFunc):
-                column.set("table", table)
-            elif expand and not column.table and column.name in alias_to_expression:
-                column.replace(alias_to_expression[column.name].copy())
 
-    for projection in scope.selects:
+            table = resolver.get_table(column.name) if resolve_table and not column.table else None
+            alias_expr, i = alias_to_expression.get(column.name, (None, 1))
+            double_agg = (
+                (alias_expr.find(exp.AggFunc) and column.find_ancestor(exp.AggFunc))
+                if alias_expr
+                else False
+            )
+
+            if table and (not alias_expr or double_agg):
+                column.set("table", table)
+            elif not column.table and alias_expr and not double_agg:
+                if isinstance(alias_expr, exp.Literal) and (literal_index or resolve_table):
+                    if literal_index:
+                        column.replace(exp.Literal.number(i))
+                else:
+                    column = column.replace(exp.paren(alias_expr))
+                    simplified = simplify_parens(column)
+                    if simplified is not column:
+                        column.replace(simplified)
+
+    for i, projection in enumerate(scope.expression.selects):
         replace_columns(projection)
 
         if isinstance(projection, exp.Alias):
-            alias_to_expression[projection.alias] = projection.this
+            alias_to_expression[projection.alias] = (projection.this, i + 1)
 
     replace_columns(expression.args.get("where"))
-    replace_columns(expression.args.get("group"))
-    replace_columns(expression.args.get("having"), resolve_agg=True)
-    replace_columns(expression.args.get("qualify"), resolve_agg=True)
-    replace_columns(expression.args.get("order"), expand=False, resolve_agg=True)
+    replace_columns(expression.args.get("group"), literal_index=True)
+    replace_columns(expression.args.get("having"), resolve_table=True)
+    replace_columns(expression.args.get("qualify"), resolve_table=True)
     scope.clear_cache()
 
 
-def _expand_group_by(scope, resolver):
-    group = scope.expression.args.get("group")
+def _expand_group_by(scope: Scope) -> None:
+    expression = scope.expression
+    group = expression.args.get("group")
     if not group:
         return
 
     group.set("expressions", _expand_positional_references(scope, group.expressions))
-    scope.expression.set("group", group)
+    expression.set("group", group)
 
 
-def _expand_order_by(scope):
+def _expand_order_by(scope: Scope, resolver: Resolver) -> None:
     order = scope.expression.args.get("order")
     if not order:
         return
@@ -220,28 +239,51 @@ def _expand_order_by(scope):
         ordereds,
         _expand_positional_references(scope, (o.this for o in ordereds)),
     ):
+        for agg in ordered.find_all(exp.AggFunc):
+            for col in agg.find_all(exp.Column):
+                if not col.table:
+                    col.set("table", resolver.get_table(col.name))
+
         ordered.set("this", new_expression)
 
+    if scope.expression.args.get("group"):
+        selects = {s.this: exp.column(s.alias_or_name) for s in scope.expression.selects}
 
-def _expand_positional_references(scope, expressions):
+        for ordered in ordereds:
+            ordered = ordered.this
+
+            ordered.replace(
+                exp.to_identifier(_select_by_pos(scope, ordered).alias)
+                if ordered.is_int
+                else selects.get(ordered, ordered)
+            )
+
+
+def _expand_positional_references(scope: Scope, expressions: t.Iterable[E]) -> t.List[E]:
     new_nodes = []
     for node in expressions:
         if node.is_int:
-            try:
-                select = scope.selects[int(node.name) - 1]
-            except IndexError:
-                raise OptimizeError(f"Unknown output column: {node.name}")
-            if isinstance(select, exp.Alias):
-                select = select.this
-            new_nodes.append(select.copy())
-            scope.clear_cache()
+            select = _select_by_pos(scope, t.cast(exp.Literal, node)).this
+
+            if isinstance(select, exp.Literal):
+                new_nodes.append(node)
+            else:
+                new_nodes.append(select.copy())
+                scope.clear_cache()
         else:
             new_nodes.append(node)
 
     return new_nodes
 
 
-def _qualify_columns(scope, resolver):
+def _select_by_pos(scope: Scope, node: exp.Literal) -> exp.Alias:
+    try:
+        return scope.expression.selects[int(node.this) - 1].assert_is(exp.Alias)
+    except IndexError:
+        raise OptimizeError(f"Unknown output column: {node.name}")
+
+
+def _qualify_columns(scope: Scope, resolver: Resolver) -> None:
     """Disambiguate columns, ensuring each column specifies a source"""
     for column in scope.columns:
         column_table = column.table
@@ -290,28 +332,33 @@ def _qualify_columns(scope, resolver):
                     column.set("table", column_table)
 
 
-def _expand_stars(scope, resolver, using_column_tables):
+def _expand_stars(
+    scope: Scope,
+    resolver: Resolver,
+    using_column_tables: t.Dict[str, t.Any],
+    pseudocolumns: t.Set[str],
+) -> None:
     """Expand stars to lists of column selections"""
 
     new_selections = []
-    except_columns = {}
-    replace_columns = {}
+    except_columns: t.Dict[int, t.Set[str]] = {}
+    replace_columns: t.Dict[int, t.Dict[str, str]] = {}
     coalesced_columns = set()
 
     # TODO: handle optimization of multiple PIVOTs (and possibly UNPIVOTs) in the future
     pivot_columns = None
     pivot_output_columns = None
-    pivot = seq_get(scope.pivots, 0)
+    pivot = t.cast(t.Optional[exp.Pivot], seq_get(scope.pivots, 0))
 
     has_pivoted_source = pivot and not pivot.args.get("unpivot")
-    if has_pivoted_source:
+    if pivot and has_pivoted_source:
         pivot_columns = set(col.output_name for col in pivot.find_all(exp.Column))
 
         pivot_output_columns = [col.output_name for col in pivot.args.get("columns", [])]
         if not pivot_output_columns:
             pivot_output_columns = [col.alias_or_name for col in pivot.expressions]
 
-    for expression in scope.selects:
+    for expression in scope.expression.selects:
         if isinstance(expression, exp.Star):
             tables = list(scope.selected_sources)
             _add_except_columns(expression, tables, except_columns)
@@ -330,8 +377,11 @@ def _expand_stars(scope, resolver, using_column_tables):
 
             columns = resolver.get_source_columns(table, only_visible=True)
 
+            if pseudocolumns:
+                columns = [name for name in columns if name.upper() not in pseudocolumns]
+
             if columns and "*" not in columns:
-                if has_pivoted_source:
+                if pivot and has_pivoted_source and pivot_columns and pivot_output_columns:
                     implicit_columns = [col for col in columns if col not in pivot_columns]
                     new_selections.extend(
                         exp.alias_(exp.column(name, table=pivot.alias), name, copy=False)
@@ -365,10 +415,14 @@ def _expand_stars(scope, resolver, using_column_tables):
             else:
                 return
 
-    scope.expression.set("expressions", new_selections)
+    # Ensures we don't overwrite the initial selections with an empty list
+    if new_selections:
+        scope.expression.set("expressions", new_selections)
 
 
-def _add_except_columns(expression, tables, except_columns):
+def _add_except_columns(
+    expression: exp.Expression, tables, except_columns: t.Dict[int, t.Set[str]]
+) -> None:
     except_ = expression.args.get("except")
 
     if not except_:
@@ -380,7 +434,9 @@ def _add_except_columns(expression, tables, except_columns):
         except_columns[id(table)] = columns
 
 
-def _add_replace_columns(expression, tables, replace_columns):
+def _add_replace_columns(
+    expression: exp.Expression, tables, replace_columns: t.Dict[int, t.Dict[str, str]]
+) -> None:
     replace = expression.args.get("replace")
 
     if not replace:
@@ -392,12 +448,12 @@ def _add_replace_columns(expression, tables, replace_columns):
         replace_columns[id(table)] = columns
 
 
-def _qualify_outputs(scope):
+def _qualify_outputs(scope: Scope) -> None:
     """Ensure all output columns are aliased"""
     new_selections = []
 
     for i, (selection, aliased_column) in enumerate(
-        itertools.zip_longest(scope.selects, scope.outer_column_list)
+        itertools.zip_longest(scope.expression.selects, scope.outer_column_list)
     ):
         if isinstance(selection, exp.Subquery):
             if not selection.output_name:
@@ -429,12 +485,12 @@ class Resolver:
     This is a class so we can lazily load some things and easily share them across functions.
     """
 
-    def __init__(self, scope, schema, infer_schema: bool = True):
+    def __init__(self, scope: Scope, schema: Schema, infer_schema: bool = True):
         self.scope = scope
         self.schema = schema
-        self._source_columns = None
+        self._source_columns: t.Optional[t.Dict[str, t.List[str]]] = None
         self._unambiguous_columns: t.Optional[t.Dict[str, str]] = None
-        self._all_columns = None
+        self._all_columns: t.Optional[t.Set[str]] = None
         self._infer_schema = infer_schema
 
     def get_table(self, column_name: str) -> t.Optional[exp.Identifier]:
@@ -478,7 +534,7 @@ class Resolver:
         return exp.to_identifier(table_name)
 
     @property
-    def all_columns(self):
+    def all_columns(self) -> t.Set[str]:
         """All available columns of all sources in this scope"""
         if self._all_columns is None:
             self._all_columns = {
@@ -486,53 +542,67 @@ class Resolver:
             }
         return self._all_columns
 
-    def get_source_columns(self, name, only_visible=False):
-        """Resolve the source columns for a given source `name`"""
+    def get_source_columns(self, name: str, only_visible: bool = False) -> t.List[str]:
+        """Resolve the source columns for a given source `name`."""
         if name not in self.scope.sources:
             raise OptimizeError(f"Unknown table: {name}")
 
         source = self.scope.sources[name]
 
-        # If referencing a table, return the columns from the schema
         if isinstance(source, exp.Table):
-            return self.schema.column_names(source, only_visible)
+            columns = self.schema.column_names(source, only_visible)
+        elif isinstance(source, Scope) and isinstance(source.expression, exp.Values):
+            columns = source.expression.alias_column_names
+        else:
+            columns = source.expression.named_selects
 
-        if isinstance(source, Scope) and isinstance(source.expression, exp.Values):
-            return source.expression.alias_column_names
+        node, _ = self.scope.selected_sources.get(name) or (None, None)
+        if isinstance(node, Scope):
+            column_aliases = node.expression.alias_column_names
+        elif isinstance(node, exp.Expression):
+            column_aliases = node.alias_column_names
+        else:
+            column_aliases = []
 
-        # Otherwise, if referencing another scope, return that scope's named selects
-        return source.expression.named_selects
+        # If the source's columns are aliased, their aliases shadow the corresponding column names
+        return [alias or name for (name, alias) in itertools.zip_longest(columns, column_aliases)]
 
-    def _get_all_source_columns(self):
+    def _get_all_source_columns(self) -> t.Dict[str, t.List[str]]:
         if self._source_columns is None:
             self._source_columns = {
-                k: self.get_source_columns(k)
-                for k in itertools.chain(self.scope.selected_sources, self.scope.lateral_sources)
+                source_name: self.get_source_columns(source_name)
+                for source_name, source in itertools.chain(
+                    self.scope.selected_sources.items(), self.scope.lateral_sources.items()
+                )
             }
         return self._source_columns
 
-    def _get_unambiguous_columns(self, source_columns):
+    def _get_unambiguous_columns(
+        self, source_columns: t.Dict[str, t.List[str]]
+    ) -> t.Dict[str, str]:
         """
         Find all the unambiguous columns in sources.
 
         Args:
-            source_columns (dict): Mapping of names to source columns
+            source_columns: Mapping of names to source columns.
+
         Returns:
-            dict: Mapping of column name to source name
+            Mapping of column name to source name.
         """
         if not source_columns:
             return {}
 
-        source_columns = list(source_columns.items())
+        source_columns_pairs = list(source_columns.items())
 
-        first_table, first_columns = source_columns[0]
+        first_table, first_columns = source_columns_pairs[0]
         unambiguous_columns = {col: first_table for col in self._find_unique_columns(first_columns)}
         all_columns = set(unambiguous_columns)
 
-        for table, columns in source_columns[1:]:
+        for table, columns in source_columns_pairs[1:]:
             unique = self._find_unique_columns(columns)
             ambiguous = set(all_columns).intersection(unique)
             all_columns.update(columns)
+
             for column in ambiguous:
                 unambiguous_columns.pop(column, None)
             for column in unique.difference(ambiguous):
@@ -541,7 +611,7 @@ class Resolver:
         return unambiguous_columns
 
     @staticmethod
-    def _find_unique_columns(columns):
+    def _find_unique_columns(columns: t.Collection[str]) -> t.Set[str]:
         """
         Find the unique columns in a list of columns.
 
@@ -551,7 +621,7 @@ class Resolver:
 
         This is necessary because duplicate column names are ambiguous.
         """
-        counts = {}
+        counts: t.Dict[str, int] = {}
         for column in columns:
             counts[column] = counts.get(column, 0) + 1
         return {column for column, count in counts.items() if count == 1}

@@ -7,8 +7,11 @@ from sqlglot.dialects.dialect import Dialect, no_ilike_sql, rename_func, trim_sq
 from sqlglot.helper import seq_get
 from sqlglot.tokens import TokenType
 
+if t.TYPE_CHECKING:
+    from sqlglot._typing import E
 
-def _parse_xml_table(self: parser.Parser) -> exp.XMLTable:
+
+def _parse_xml_table(self: Oracle.Parser) -> exp.XMLTable:
     this = self._parse_string()
 
     passing = None
@@ -22,13 +25,17 @@ def _parse_xml_table(self: parser.Parser) -> exp.XMLTable:
     by_ref = self._match_text_seq("RETURNING", "SEQUENCE", "BY", "REF")
 
     if self._match_text_seq("COLUMNS"):
-        columns = self._parse_csv(lambda: self._parse_column_def(self._parse_field(any_token=True)))
+        columns = self._parse_csv(self._parse_field_def)
 
     return self.expression(exp.XMLTable, this=this, passing=passing, columns=columns, by_ref=by_ref)
 
 
 class Oracle(Dialect):
     ALIAS_POST_TABLESAMPLE = True
+    LOCKING_READS_SUPPORTED = True
+
+    # See section 8: https://docs.oracle.com/cd/A97630_01/server.920/a96540/sql_elements9a.htm
+    RESOLVES_IDENTIFIERS_AS_UPPERCASE = True
 
     # https://docs.oracle.com/database/121/SQLRF/sql_elements004.htm#SQLRF00212
     # https://docs.python.org/3/library/datetime.html#strftime-and-strptime-format-codes
@@ -66,6 +73,16 @@ class Oracle(Dialect):
 
         FUNCTION_PARSERS: t.Dict[str, t.Callable] = {
             **parser.Parser.FUNCTION_PARSERS,
+            "JSON_ARRAY": lambda self: self._parse_json_array(
+                exp.JSONArray,
+                expressions=self._parse_csv(lambda: self._parse_format_json(self._parse_bitwise())),
+            ),
+            "JSON_ARRAYAGG": lambda self: self._parse_json_array(
+                exp.JSONArrayAgg,
+                this=self._parse_format_json(self._parse_bitwise()),
+                order=self._parse_order(),
+            ),
+            "JSON_TABLE": lambda self: self._parse_json_table(),
             "XMLTABLE": _parse_xml_table,
         }
 
@@ -74,6 +91,42 @@ class Oracle(Dialect):
                 exp.DateStrToDate, this=this
             )
         }
+
+        # SELECT UNIQUE .. is old-style Oracle syntax for SELECT DISTINCT ..
+        # Reference: https://stackoverflow.com/a/336455
+        DISTINCT_TOKENS = {TokenType.DISTINCT, TokenType.UNIQUE}
+
+        # Note: this is currently incomplete; it only implements the "JSON_value_column" part
+        def _parse_json_column_def(self) -> exp.JSONColumnDef:
+            this = self._parse_id_var()
+            kind = self._parse_types(allow_identifiers=False)
+            path = self._match_text_seq("PATH") and self._parse_string()
+            return self.expression(exp.JSONColumnDef, this=this, kind=kind, path=path)
+
+        def _parse_json_table(self) -> exp.JSONTable:
+            this = self._parse_format_json(self._parse_bitwise())
+            path = self._match(TokenType.COMMA) and self._parse_string()
+            error_handling = self._parse_on_handling("ERROR", "ERROR", "NULL")
+            empty_handling = self._parse_on_handling("EMPTY", "ERROR", "NULL")
+            self._match(TokenType.COLUMN)
+            expressions = self._parse_wrapped_csv(self._parse_json_column_def, optional=True)
+
+            return exp.JSONTable(
+                this=this,
+                expressions=expressions,
+                path=path,
+                error_handling=error_handling,
+                empty_handling=empty_handling,
+            )
+
+        def _parse_json_array(self, expr_type: t.Type[E], **kwargs) -> E:
+            return self.expression(
+                expr_type,
+                null_handling=self._parse_on_handling("NULL", "NULL", "ABSENT"),
+                return_type=self._match_text_seq("RETURNING") and self._parse_type(),
+                strict=self._match_text_seq("STRICT"),
+                **kwargs,
+            )
 
         def _parse_column(self) -> t.Optional[exp.Expression]:
             column = super()._parse_column()
@@ -99,6 +152,9 @@ class Oracle(Dialect):
         LOCKING_READS_SUPPORTED = True
         JOIN_HINTS = False
         TABLE_HINTS = False
+        COLUMN_JOIN_MARKS_SUPPORTED = True
+
+        LIMIT_FETCH = "FETCH"
 
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
@@ -110,6 +166,7 @@ class Oracle(Dialect):
             exp.DataType.Type.DOUBLE: "DOUBLE PRECISION",
             exp.DataType.Type.VARCHAR: "VARCHAR2",
             exp.DataType.Type.NVARCHAR: "NVARCHAR2",
+            exp.DataType.Type.NCHAR: "NCHAR",
             exp.DataType.Type.TEXT: "CLOB",
             exp.DataType.Type.BINARY: "BLOB",
             exp.DataType.Type.VARBINARY: "BLOB",
@@ -121,9 +178,7 @@ class Oracle(Dialect):
                 "TO_DATE", e.this, exp.Literal.string("YYYY-MM-DD")
             ),
             exp.Group: transforms.preprocess([transforms.unalias_group]),
-            exp.Hint: lambda self, e: f" /*+ {self.expressions(e).strip()} */",
             exp.ILike: no_ilike_sql,
-            exp.Coalesce: rename_func("NVL"),
             exp.Select: transforms.preprocess([transforms.eliminate_distinct_on]),
             exp.StrToTime: lambda self, e: f"TO_TIMESTAMP({self.sql(e, 'this')}, {self.format_time(e)})",
             exp.Subquery: lambda self, e: self.subquery_sql(e, sep=" "),
@@ -141,14 +196,8 @@ class Oracle(Dialect):
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
         }
 
-        LIMIT_FETCH = "FETCH"
-
         def offset_sql(self, expression: exp.Offset) -> str:
             return f"{super().offset_sql(expression)} ROWS"
-
-        def column_sql(self, expression: exp.Column) -> str:
-            column = super().column_sql(expression)
-            return f"{column} (+)" if expression.args.get("join_mark") else column
 
         def xmltable_sql(self, expression: exp.XMLTable) -> str:
             this = self.sql(expression, "this")
@@ -162,7 +211,7 @@ class Oracle(Dialect):
             return f"XMLTABLE({self.sep('')}{self.indent(this + passing + by_ref + columns)}{self.seg(')', sep='')}"
 
     class Tokenizer(tokens.Tokenizer):
-        VAR_SINGLE_TOKENS = {"@"}
+        VAR_SINGLE_TOKENS = {"@", "$", "#"}
 
         KEYWORDS = {
             **tokens.Tokenizer.KEYWORDS,

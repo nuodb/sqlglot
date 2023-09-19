@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import typing as t
+
 from sqlglot import exp, generator, parser, tokens, transforms
 from sqlglot.dialects.dialect import Dialect, max_or_greatest, min_or_least
 from sqlglot.tokens import TokenType
 
 
 class Teradata(Dialect):
+    SUPPORTS_SEMI_ANTI_JOIN = False
+
     TIME_MAPPING = {
         "Y": "%Y",
         "YYYY": "%Y",
@@ -33,14 +37,17 @@ class Teradata(Dialect):
             **tokens.Tokenizer.KEYWORDS,
             "^=": TokenType.NEQ,
             "BYTEINT": TokenType.SMALLINT,
+            "COLLECT": TokenType.COMMAND,
             "GE": TokenType.GTE,
             "GT": TokenType.GT,
+            "HELP": TokenType.COMMAND,
             "INS": TokenType.INSERT,
             "LE": TokenType.LTE,
             "LT": TokenType.LT,
             "MOD": TokenType.MOD,
             "NE": TokenType.NEQ,
             "NOT=": TokenType.NEQ,
+            "SAMPLE": TokenType.TABLE_SAMPLE,
             "SEL": TokenType.SELECT,
             "ST_GEOMETRY": TokenType.GEOMETRY,
             "TOP": TokenType.TOP,
@@ -51,6 +58,8 @@ class Teradata(Dialect):
         SINGLE_TOKENS.pop("%")
 
     class Parser(parser.Parser):
+        TABLESAMPLE_CSV = True
+
         CHARSET_TRANSLATORS = {
             "GRAPHIC_TO_KANJISJIS",
             "GRAPHIC_TO_LATIN",
@@ -91,6 +100,9 @@ class Teradata(Dialect):
 
         STATEMENT_PARSERS = {
             **parser.Parser.STATEMENT_PARSERS,
+            TokenType.DATABASE: lambda self: self.expression(
+                exp.Use, this=self._parse_table(schema=False)
+            ),
             TokenType.REPLACE: lambda self: self._parse_create(),
         }
 
@@ -121,7 +133,7 @@ class Teradata(Dialect):
                 exp.Update,
                 **{  # type: ignore
                     "this": self._parse_table(alias_tokens=self.UPDATE_ALIAS_TOKENS),
-                    "from": self._parse_from(modifiers=True),
+                    "from": self._parse_from(joins=True),
                     "expressions": self._match(TokenType.SET)
                     and self._parse_csv(self._parse_equality),
                     "where": self._parse_where(),
@@ -140,6 +152,7 @@ class Teradata(Dialect):
     class Generator(generator.Generator):
         JOIN_HINTS = False
         TABLE_HINTS = False
+        QUERY_HINTS = False
 
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
@@ -157,10 +170,18 @@ class Teradata(Dialect):
             **generator.Generator.TRANSFORMS,
             exp.Max: max_or_greatest,
             exp.Min: min_or_least,
-            exp.Select: transforms.preprocess([transforms.eliminate_distinct_on]),
+            exp.Select: transforms.preprocess(
+                [transforms.eliminate_distinct_on, transforms.eliminate_semi_and_anti_joins]
+            ),
             exp.StrToDate: lambda self, e: f"CAST({self.sql(e, 'this')} AS DATE FORMAT {self.format_time(e)})",
             exp.ToChar: lambda self, e: self.function_fallback_sql(e),
+            exp.Use: lambda self, e: f"DATABASE {self.sql(e, 'this')}",
         }
+
+        def tablesample_sql(
+            self, expression: exp.TableSample, seed_prefix: str = "SEED", sep=" AS "
+        ) -> str:
+            return f"{self.sql(expression, 'this')} SAMPLE {self.expressions(expression)}"
 
         def partitionedbyproperty_sql(self, expression: exp.PartitionedByProperty) -> str:
             return f"PARTITION BY {self.sql(expression, 'this')}"
@@ -191,11 +212,7 @@ class Teradata(Dialect):
 
             return f"RANGE_N({this} BETWEEN {expressions_sql}{each_sql})"
 
-        def createable_sql(
-            self,
-            expression: exp.Create,
-            locations: dict[exp.Properties.Location, list[exp.Property]],
-        ) -> str:
+        def createable_sql(self, expression: exp.Create, locations: t.DefaultDict) -> str:
             kind = self.sql(expression, "kind").upper()
             if kind == "TABLE" and locations.get(exp.Properties.Location.POST_NAME):
                 this_name = self.sql(expression.this, "this")
@@ -206,4 +223,5 @@ class Teradata(Dialect):
                 )
                 this_schema = self.schema_columns_sql(expression.this)
                 return f"{this_name}{this_properties}{self.sep()}{this_schema}"
+
             return super().createable_sql(expression, locations)

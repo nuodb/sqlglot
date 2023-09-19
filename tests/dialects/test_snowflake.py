@@ -1,3 +1,5 @@
+from unittest import mock
+
 from sqlglot import UnsupportedError, exp, parse_one
 from tests.dialects.test_dialect import Validator
 
@@ -6,6 +8,39 @@ class TestSnowflake(Validator):
     dialect = "snowflake"
 
     def test_snowflake(self):
+        self.validate_identity(
+            'DESCRIBE TABLE "SNOWFLAKE_SAMPLE_DATA"."TPCDS_SF100TCL"."WEB_SITE" type=stage'
+        )
+
+        self.validate_all(
+            "SELECT * FROM x START WITH a = b CONNECT BY c = PRIOR d",
+            read={
+                "oracle": "SELECT * FROM x START WITH a = b CONNECT BY c = PRIOR d",
+            },
+            write={
+                "oracle": "SELECT * FROM x START WITH a = b CONNECT BY c = PRIOR d",
+                "snowflake": "SELECT * FROM x START WITH a = b CONNECT BY c = PRIOR d",
+            },
+        )
+        self.validate_all(
+            "SELECT INSERT(a, 0, 0, 'b')",
+            read={
+                "mysql": "SELECT INSERT(a, 0, 0, 'b')",
+                "snowflake": "SELECT INSERT(a, 0, 0, 'b')",
+                "tsql": "SELECT STUFF(a, 0, 0, 'b')",
+            },
+            write={
+                "mysql": "SELECT INSERT(a, 0, 0, 'b')",
+                "snowflake": "SELECT INSERT(a, 0, 0, 'b')",
+                "tsql": "SELECT STUFF(a, 0, 0, 'b')",
+            },
+        )
+
+        self.validate_identity("LISTAGG(data['some_field'], ',')")
+        self.validate_identity("WEEKOFYEAR(tstamp)")
+        self.validate_identity("SELECT SUM(amount) FROM mytable GROUP BY ALL")
+        self.validate_identity("WITH x AS (SELECT 1 AS foo) SELECT foo FROM IDENTIFIER('x')")
+        self.validate_identity("WITH x AS (SELECT 1 AS foo) SELECT IDENTIFIER('foo') FROM x")
         self.validate_identity("INITCAP('iqamqinterestedqinqthisqtopic', 'q')")
         self.validate_identity("CAST(x AS GEOMETRY)")
         self.validate_identity("OBJECT_CONSTRUCT(*)")
@@ -23,19 +58,64 @@ class TestSnowflake(Validator):
         self.validate_identity("CREATE TABLE foo (bar FLOAT AUTOINCREMENT START 0 INCREMENT 1)")
         self.validate_identity("ALTER TABLE IF EXISTS foo SET TAG a = 'a', b = 'b', c = 'c'")
         self.validate_identity("ALTER TABLE foo UNSET TAG a, b, c")
+        self.validate_identity("ALTER TABLE foo SET COMMENT = 'bar'")
+        self.validate_identity("ALTER TABLE foo SET CHANGE_TRACKING = FALSE")
+        self.validate_identity("ALTER TABLE foo UNSET DATA_RETENTION_TIME_IN_DAYS, CHANGE_TRACKING")
+        self.validate_identity("COMMENT IF EXISTS ON TABLE foo IS 'bar'")
+        self.validate_identity("SELECT CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', col)")
+        self.validate_identity("REGEXP_REPLACE('target', 'pattern', '\n')")
         self.validate_identity(
             'COPY INTO NEW_TABLE ("foo", "bar") FROM (SELECT $1, $2, $3, $4 FROM @%old_table)'
         )
-        self.validate_identity("COMMENT IF EXISTS ON TABLE foo IS 'bar'")
-        self.validate_identity("SELECT CONVERT_TIMEZONE('UTC', 'America/Los_Angeles', col)")
+        self.validate_identity(
+            "SELECT state, city, SUM(retail_price * quantity) AS gross_revenue FROM sales GROUP BY ALL"
+        )
+        self.validate_identity(
+            r"SELECT RLIKE(a, $$regular expression with \ characters: \d{2}-\d{3}-\d{4}$$, 'i') FROM log_source",
+            r"SELECT REGEXP_LIKE(a, 'regular expression with \\ characters: \\d{2}-\\d{3}-\\d{4}', 'i') FROM log_source",
+        )
+        self.validate_identity(
+            r"SELECT $$a ' \ \t \x21 z $ $$",
+            r"SELECT 'a \' \\ \\t \\x21 z $ '",
+        )
+        self.validate_identity(
+            "SELECT {'test': 'best'}::VARIANT",
+            "SELECT CAST(OBJECT_CONSTRUCT('test', 'best') AS VARIANT)",
+        )
 
+        self.validate_all("CAST(x AS BYTEINT)", write={"snowflake": "CAST(x AS INT)"})
         self.validate_all("CAST(x AS CHAR VARYING)", write={"snowflake": "CAST(x AS VARCHAR)"})
+        self.validate_all("CAST(x AS CHARACTER VARYING)", write={"snowflake": "CAST(x AS VARCHAR)"})
+        self.validate_all("CAST(x AS NCHAR VARYING)", write={"snowflake": "CAST(x AS VARCHAR)"})
+        self.validate_all(
+            "ARRAY_GENERATE_RANGE(0, 3)",
+            write={
+                "bigquery": "GENERATE_ARRAY(0, 3 - 1)",
+                "postgres": "GENERATE_SERIES(0, 3 - 1)",
+                "presto": "SEQUENCE(0, 3 - 1)",
+                "snowflake": "ARRAY_GENERATE_RANGE(0, (3 - 1) + 1)",
+            },
+        )
+        self.validate_all(
+            "ARRAY_GENERATE_RANGE(0, 3 + 1)",
+            read={
+                "bigquery": "GENERATE_ARRAY(0, 3)",
+                "postgres": "GENERATE_SERIES(0, 3)",
+                "presto": "SEQUENCE(0, 3)",
+            },
+        )
+        self.validate_all(
+            "SELECT DATE_PART('year', TIMESTAMP '2020-01-01')",
+            write={
+                "hive": "SELECT EXTRACT(year FROM CAST('2020-01-01' AS TIMESTAMP))",
+                "snowflake": "SELECT DATE_PART('year', CAST('2020-01-01' AS TIMESTAMPNTZ))",
+                "spark": "SELECT EXTRACT(year FROM CAST('2020-01-01' AS TIMESTAMP))",
+            },
+        )
         self.validate_all(
             "SELECT * FROM (VALUES (0) foo(bar))",
             write={"snowflake": "SELECT * FROM (VALUES (0)) AS foo(bar)"},
         )
-        self.validate_all("CAST(x AS CHARACTER VARYING)", write={"snowflake": "CAST(x AS VARCHAR)"})
-        self.validate_all("CAST(x AS NCHAR VARYING)", write={"snowflake": "CAST(x AS VARCHAR)"})
         self.validate_all(
             "OBJECT_CONSTRUCT(a, b, c, d)",
             read={
@@ -299,17 +379,18 @@ class TestSnowflake(Validator):
             "SELECT IFF(TRUE, 'true', 'false')",
             write={
                 "snowflake": "SELECT IFF(TRUE, 'true', 'false')",
+                "spark": "SELECT IF(TRUE, 'true', 'false')",
             },
         )
         self.validate_all(
             "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname",
             write={
-                "duckdb": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname, lname",
-                "postgres": "SELECT fname, lname, age FROM person ORDER BY age DESC, fname, lname",
-                "presto": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname, lname",
-                "hive": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname NULLS LAST, lname NULLS LAST",
-                "spark": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname NULLS LAST, lname NULLS LAST",
-                "snowflake": "SELECT fname, lname, age FROM person ORDER BY age DESC, fname, lname",
+                "duckdb": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC, lname",
+                "postgres": "SELECT fname, lname, age FROM person ORDER BY age DESC, fname ASC, lname",
+                "presto": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC, lname",
+                "hive": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname NULLS LAST",
+                "spark": "SELECT fname, lname, age FROM person ORDER BY age DESC NULLS FIRST, fname ASC NULLS LAST, lname NULLS LAST",
+                "snowflake": "SELECT fname, lname, age FROM person ORDER BY age DESC, fname ASC, lname",
             },
         )
         self.validate_all(
@@ -352,28 +433,17 @@ class TestSnowflake(Validator):
             },
         )
         self.validate_all(
-            "SELECT NVL2(a, b, c)",
-            write={
-                "snowflake": "SELECT NVL2(a, b, c)",
-            },
-        )
-        self.validate_all(
             "SELECT $$a$$",
             write={
                 "snowflake": "SELECT 'a'",
             },
         )
         self.validate_all(
-            r"SELECT $$a ' \ \t \x21 z $ $$",
-            write={
-                "snowflake": r"SELECT 'a \' \ \t \x21 z $ '",
-            },
-        )
-        self.validate_identity("REGEXP_REPLACE('target', 'pattern', '\n')")
-        self.validate_all(
             "SELECT RLIKE(a, b)",
             write={
+                "hive": "SELECT a RLIKE b",
                 "snowflake": "SELECT REGEXP_LIKE(a, b)",
+                "spark": "SELECT a RLIKE b",
             },
         )
         self.validate_all(
@@ -544,7 +614,17 @@ class TestSnowflake(Validator):
                 "snowflake": "DATEADD(DAY, 5, CAST('2008-12-25' AS DATE))",
             },
         )
-        self.validate_identity("DATEDIFF(DAY, 5, CAST('2008-12-25' AS DATE))")
+        self.validate_identity(
+            "DATEDIFF(DAY, CAST('2007-12-25' AS DATE), CAST('2008-12-25' AS DATE))"
+        )
+        self.validate_identity(
+            "TIMEDIFF(DAY, CAST('2007-12-25' AS DATE), CAST('2008-12-25' AS DATE))",
+            "DATEDIFF(DAY, CAST('2007-12-25' AS DATE), CAST('2008-12-25' AS DATE))",
+        )
+        self.validate_identity(
+            "TIMESTAMPDIFF(DAY, CAST('2007-12-25' AS DATE), CAST('2008-12-25' AS DATE))",
+            "DATEDIFF(DAY, CAST('2007-12-25' AS DATE), CAST('2008-12-25' AS DATE))",
+        )
 
     def test_semi_structured_types(self):
         self.validate_identity("SELECT CAST(a AS VARIANT)")
@@ -562,7 +642,7 @@ class TestSnowflake(Validator):
             write={
                 "snowflake": "[0, 1, 2]",
                 "bigquery": "[0, 1, 2]",
-                "duckdb": "LIST_VALUE(0, 1, 2)",
+                "duckdb": "[0, 1, 2]",
                 "presto": "ARRAY[0, 1, 2]",
                 "spark": "ARRAY(0, 1, 2)",
             },
@@ -581,6 +661,8 @@ class TestSnowflake(Validator):
         self.validate_identity("CREATE DATABASE mytestdb_clone CLONE mytestdb")
         self.validate_identity("CREATE SCHEMA mytestschema_clone CLONE testschema")
         self.validate_identity("CREATE TABLE orders_clone CLONE orders")
+        self.validate_identity("CREATE TABLE IDENTIFIER('foo') (COLUMN1 VARCHAR, COLUMN2 VARCHAR)")
+        self.validate_identity("CREATE TABLE IDENTIFIER($foo) (col1 VARCHAR, col2 VARCHAR)")
         self.validate_identity(
             "CREATE TABLE orders_clone_restore CLONE orders AT (TIMESTAMP => TO_TIMESTAMP_TZ('04/05/2013 01:02:03', 'mm/dd/yyyy hh24:mi:ss'))"
         )
@@ -592,6 +674,9 @@ class TestSnowflake(Validator):
         )
         self.validate_identity(
             "CREATE SCHEMA mytestschema_clone_restore CLONE testschema BEFORE (TIMESTAMP => TO_TIMESTAMP(40 * 365 * 86400))"
+        )
+        self.validate_identity(
+            "CREATE OR REPLACE TABLE EXAMPLE_DB.DEMO.USERS (ID DECIMAL(38, 0) NOT NULL, PRIMARY KEY (ID), FOREIGN KEY (CITY_CODE) REFERENCES EXAMPLE_DB.DEMO.CITIES (CITY_CODE))"
         )
 
         self.validate_all(
@@ -845,6 +930,98 @@ FROM persons AS p, LATERAL FLATTEN(input => p.c, path => 'contact') AS f, LATERA
         self.assertIsInstance(ilike, exp.ILikeAny)
         like.sql()  # check that this doesn't raise
 
+    @mock.patch("sqlglot.generator.logger")
+    def test_regexp_substr(self, logger):
+        self.validate_all(
+            "REGEXP_SUBSTR(subject, pattern, pos, occ, params, group)",
+            write={
+                "bigquery": "REGEXP_EXTRACT(subject, pattern, pos, occ)",
+                "hive": "REGEXP_EXTRACT(subject, pattern, group)",
+                "presto": "REGEXP_EXTRACT(subject, pattern, group)",
+                "snowflake": "REGEXP_SUBSTR(subject, pattern, pos, occ, params, group)",
+                "spark": "REGEXP_EXTRACT(subject, pattern, group)",
+            },
+        )
+        self.validate_all(
+            "REGEXP_SUBSTR(subject, pattern)",
+            read={
+                "bigquery": "REGEXP_EXTRACT(subject, pattern)",
+                "hive": "REGEXP_EXTRACT(subject, pattern)",
+                "presto": "REGEXP_EXTRACT(subject, pattern)",
+                "spark": "REGEXP_EXTRACT(subject, pattern)",
+            },
+            write={
+                "bigquery": "REGEXP_EXTRACT(subject, pattern)",
+                "hive": "REGEXP_EXTRACT(subject, pattern)",
+                "presto": "REGEXP_EXTRACT(subject, pattern)",
+                "snowflake": "REGEXP_SUBSTR(subject, pattern)",
+                "spark": "REGEXP_EXTRACT(subject, pattern)",
+            },
+        )
+        self.validate_all(
+            "REGEXP_SUBSTR(subject, pattern, 1, 1, 'c', group)",
+            read={
+                "bigquery": "REGEXP_SUBSTR(subject, pattern, 1, 1, 'c', group)",
+                "duckdb": "REGEXP_EXTRACT(subject, pattern, group)",
+                "hive": "REGEXP_EXTRACT(subject, pattern, group)",
+                "presto": "REGEXP_EXTRACT(subject, pattern, group)",
+                "snowflake": "REGEXP_SUBSTR(subject, pattern, 1, 1, 'c', group)",
+                "spark": "REGEXP_EXTRACT(subject, pattern, group)",
+            },
+        )
+
+    @mock.patch("sqlglot.generator.logger")
+    def test_regexp_replace(self, logger):
+        self.validate_all(
+            "REGEXP_REPLACE(subject, pattern)",
+            write={
+                "bigquery": "REGEXP_REPLACE(subject, pattern, '')",
+                "duckdb": "REGEXP_REPLACE(subject, pattern, '')",
+                "hive": "REGEXP_REPLACE(subject, pattern, '')",
+                "snowflake": "REGEXP_REPLACE(subject, pattern, '')",
+                "spark": "REGEXP_REPLACE(subject, pattern, '')",
+            },
+        )
+        self.validate_all(
+            "REGEXP_REPLACE(subject, pattern, replacement)",
+            read={
+                "bigquery": "REGEXP_REPLACE(subject, pattern, replacement)",
+                "duckdb": "REGEXP_REPLACE(subject, pattern, replacement)",
+                "hive": "REGEXP_REPLACE(subject, pattern, replacement)",
+                "spark": "REGEXP_REPLACE(subject, pattern, replacement)",
+            },
+            write={
+                "bigquery": "REGEXP_REPLACE(subject, pattern, replacement)",
+                "duckdb": "REGEXP_REPLACE(subject, pattern, replacement)",
+                "hive": "REGEXP_REPLACE(subject, pattern, replacement)",
+                "snowflake": "REGEXP_REPLACE(subject, pattern, replacement)",
+                "spark": "REGEXP_REPLACE(subject, pattern, replacement)",
+            },
+        )
+        self.validate_all(
+            "REGEXP_REPLACE(subject, pattern, replacement, position)",
+            read={
+                "spark": "REGEXP_REPLACE(subject, pattern, replacement, position)",
+            },
+            write={
+                "bigquery": "REGEXP_REPLACE(subject, pattern, replacement)",
+                "duckdb": "REGEXP_REPLACE(subject, pattern, replacement)",
+                "hive": "REGEXP_REPLACE(subject, pattern, replacement)",
+                "snowflake": "REGEXP_REPLACE(subject, pattern, replacement, position)",
+                "spark": "REGEXP_REPLACE(subject, pattern, replacement, position)",
+            },
+        )
+        self.validate_all(
+            "REGEXP_REPLACE(subject, pattern, replacement, position, occurrence, parameters)",
+            write={
+                "bigquery": "REGEXP_REPLACE(subject, pattern, replacement)",
+                "duckdb": "REGEXP_REPLACE(subject, pattern, replacement)",
+                "hive": "REGEXP_REPLACE(subject, pattern, replacement)",
+                "snowflake": "REGEXP_REPLACE(subject, pattern, replacement, position, occurrence, parameters)",
+                "spark": "REGEXP_REPLACE(subject, pattern, replacement, position)",
+            },
+        )
+
     def test_match_recognize(self):
         for row in (
             "ONE ROW PER MATCH",
@@ -878,3 +1055,33 @@ MATCH_RECOGNIZE (
 )""",
                     pretty=True,
                 )
+
+    def test_show(self):
+        # Parsed as Command
+        self.validate_identity("SHOW COLUMNS IN TABLE dt_test")
+        self.validate_identity("SHOW TABLES LIKE 'line%' IN tpch.public")
+
+        ast = parse_one("SHOW TABLES HISTORY IN tpch.public")
+        self.assertIsInstance(ast, exp.Command)
+
+        # Parsed as Show
+        self.validate_identity("SHOW PRIMARY KEYS")
+        self.validate_identity("SHOW PRIMARY KEYS IN ACCOUNT")
+        self.validate_identity("SHOW PRIMARY KEYS IN DATABASE")
+        self.validate_identity("SHOW PRIMARY KEYS IN DATABASE foo")
+        self.validate_identity("SHOW PRIMARY KEYS IN TABLE")
+        self.validate_identity("SHOW PRIMARY KEYS IN TABLE foo")
+        self.validate_identity(
+            'SHOW PRIMARY KEYS IN "TEST"."PUBLIC"."customers"',
+            'SHOW PRIMARY KEYS IN TABLE "TEST"."PUBLIC"."customers"',
+        )
+        self.validate_identity(
+            'SHOW TERSE PRIMARY KEYS IN "TEST"."PUBLIC"."customers"',
+            'SHOW PRIMARY KEYS IN TABLE "TEST"."PUBLIC"."customers"',
+        )
+
+        ast = parse_one('SHOW PRIMARY KEYS IN "TEST"."PUBLIC"."customers"', read="snowflake")
+        table = ast.find(exp.Table)
+
+        self.assertIsNotNone(table)
+        self.assertEqual(table.sql(dialect="snowflake"), '"TEST"."PUBLIC"."customers"')

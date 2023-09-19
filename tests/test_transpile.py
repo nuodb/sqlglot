@@ -44,9 +44,6 @@ class TestTranspile(unittest.TestCase):
                 with self.assertRaises(ParseError):
                     self.validate(f"SELECT x {key}", "")
 
-    def test_asc(self):
-        self.validate("SELECT x FROM y ORDER BY x ASC", "SELECT x FROM y ORDER BY x")
-
     def test_unary(self):
         self.validate("+++1", "1")
         self.validate("+-1", "-1")
@@ -90,6 +87,19 @@ class TestTranspile(unittest.TestCase):
         self.validate("SELECT 3>=3", "SELECT 3 >= 3")
 
     def test_comments(self):
+        self.validate("SELECT\n  foo\n/* comments */\n;", "SELECT foo /* comments */")
+        self.validate(
+            "SELECT * FROM a INNER /* comments */ JOIN b",
+            "SELECT * FROM a /* comments */ INNER JOIN b",
+        )
+        self.validate(
+            "SELECT * FROM a LEFT /* comment 1 */ OUTER /* comment 2 */ JOIN b",
+            "SELECT * FROM a /* comment 1 */ /* comment 2 */ LEFT OUTER JOIN b",
+        )
+        self.validate(
+            "SELECT CASE /* test */ WHEN a THEN b ELSE c END",
+            "SELECT CASE WHEN a THEN b ELSE c END /* test */",
+        )
         self.validate("SELECT 1 /*/2 */", "SELECT 1 /* /2 */")
         self.validate("SELECT */*comment*/", "SELECT * /* comment */")
         self.validate(
@@ -186,7 +196,7 @@ WHERE
             */
             SELECT
               tbl.cola /* comment 1 */ + tbl.colb /* comment 2 */,
-              CAST(x AS INT), # comment 3
+              CAST(x AS CHAR), # comment 3
               y               -- comment 4
             FROM
               bar /* comment 5 */,
@@ -198,7 +208,7 @@ WHERE
             */
 SELECT
   tbl.cola /* comment 1 */ + tbl.colb /* comment 2 */,
-  CAST(x AS INT), /* comment 3 */
+  CAST(x AS CHAR), /* comment 3 */
   y /* comment 4 */
 FROM bar /* comment 5 */, tbl /*          comment 6 */""",
             read="mysql",
@@ -211,9 +221,12 @@ FROM bar /* comment 5 */, tbl /*          comment 6 */""",
             -- comment 1
             AND bar
             -- comment 2
-            AND bla;
+            AND bla
+            -- comment 3
+            LIMIT 10
+            ;
             """,
-            "SELECT a FROM b WHERE foo AND /* comment 1 */ bar AND /* comment 2 */ bla",
+            "SELECT a FROM b WHERE foo AND /* comment 1 */ bar AND /* comment 2 */ bla LIMIT 10 /* comment 3 */",
         )
         self.validate(
             """
@@ -285,6 +298,88 @@ FROM v""",
             "SELECT 1 /* hi this is a comment */",
             read="snowflake",
         )
+        self.validate(
+            "-- comment\nDROP TABLE IF EXISTS foo",
+            "/* comment */ DROP TABLE IF EXISTS foo",
+        )
+        self.validate(
+            """
+            -- comment1
+            -- comment2
+
+            -- comment3
+            DROP TABLE IF EXISTS db.tba
+            """,
+            """/* comment1 */
+/* comment2 */
+/* comment3 */
+DROP TABLE IF EXISTS db.tba""",
+            pretty=True,
+        )
+        self.validate(
+            """
+            -- comment4
+            CREATE TABLE db.tba AS
+            SELECT a, b, c
+            FROM tb_01
+            WHERE
+            -- comment5
+              a = 1 AND b = 2 --comment6
+              -- and c = 1
+            -- comment7
+            ;
+            """,
+            """/* comment4 */
+CREATE TABLE db.tba AS
+SELECT
+  a,
+  b,
+  c
+FROM tb_01
+WHERE
+  a /* comment5 */ = 1 AND b = 2 /* comment6 */
+  /* and c = 1 */
+  /* comment7 */""",
+            pretty=True,
+        )
+        self.validate(
+            """
+            SELECT
+               -- This is testing comments
+                col,
+            -- 2nd testing comments
+            CASE WHEN a THEN b ELSE c END as d
+            FROM t
+            """,
+            """SELECT
+  col, /* This is testing comments */
+  CASE WHEN a THEN b ELSE c END /* 2nd testing comments */ AS d
+FROM t""",
+            pretty=True,
+        )
+        self.validate(
+            """
+            SELECT * FROM a
+            -- comments
+            INNER JOIN b
+            """,
+            """SELECT
+  *
+FROM a
+/* comments */
+INNER JOIN b""",
+            pretty=True,
+        )
+        self.validate(
+            "SELECT * FROM a LEFT /* comment 1 */ OUTER /* comment 2 */ JOIN b",
+            """SELECT
+  *
+FROM a
+/* comment 1 */
+/* comment 2 */
+LEFT OUTER JOIN b""",
+            pretty=True,
+        )
 
     def test_types(self):
         self.validate("INT 1", "CAST(1 AS INT)")
@@ -295,11 +390,13 @@ FROM v""",
         self.validate("x::INT y", "CAST(x AS INT) AS y")
         self.validate("x::INT AS y", "CAST(x AS INT) AS y")
         self.validate("x::INT::BOOLEAN", "CAST(CAST(x AS INT) AS BOOLEAN)")
+        self.validate("interval::int", "CAST(interval AS INT)")
+        self.validate("x::user_defined_type", "CAST(x AS user_defined_type)")
         self.validate("CAST(x::INT AS BOOLEAN)", "CAST(CAST(x AS INT) AS BOOLEAN)")
         self.validate("CAST(x AS INT)::BOOLEAN", "CAST(CAST(x AS INT) AS BOOLEAN)")
 
         with self.assertRaises(ParseError):
-            transpile("x::z")
+            transpile("x::z", read="duckdb")
 
     def test_not_range(self):
         self.validate("a NOT LIKE b", "NOT a LIKE b")
@@ -511,11 +608,11 @@ FROM v""",
         )
 
     @mock.patch("sqlglot.helper.logger")
-    def test_index_offset(self, mock_logger):
+    def test_index_offset(self, logger):
         self.validate("x[0]", "x[1]", write="presto", identity=False)
         self.validate("x[1]", "x[0]", read="presto", identity=False)
-        mock_logger.warning.assert_any_call("Applying array index offset (%s)", 1)
-        mock_logger.warning.assert_any_call("Applying array index offset (%s)", -1)
+        logger.warning.assert_any_call("Applying array index offset (%s)", 1)
+        logger.warning.assert_any_call("Applying array index offset (%s)", -1)
 
         self.validate("x[x - 1]", "x[x - 1]", write="presto", identity=False)
         self.validate(
