@@ -415,13 +415,16 @@ class MySQL(Dialect):
         """
         def _parse_key_index(self) ->exp.KeyColumnConstraintForIndex:
             self._match(TokenType.KEY)
+            desc = False
             idx_name = self._parse_id_var()
             col_name = self._parse_bitwise()
             if self._match_texts("USING"):
                 opts = f"USING {self._parse_bitwise()}"
             else:
                 opts = False
-            return self.expression(exp.KeyColumnConstraintForIndex, this=True, desc = True, keyname=idx_name, colname=col_name, options=opts)
+            if self._match_texts("DESC"):
+                desc = True
+            return self.expression(exp.KeyColumnConstraintForIndex, this=True, desc = {desc}, keyname=idx_name, colname=col_name, options=opts)
 
         def _parse_lock_tables(self) -> exp.ExclusiveLock:
             self._match(TokenType.LOCK)
