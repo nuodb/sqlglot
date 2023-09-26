@@ -6,8 +6,11 @@ from sqlglot.tokens import Tokenizer, TokenType, Token
 
 
 global schema_name
+schema_name = None
 
 def _parse_foreign_key_index(self:generator.Generator, expression: exp.Expression) -> str:
+
+
     if isinstance(expression.parent.parent, exp.Create):
         global schema_name
         foreign_key_expression = expression.find_all(exp.ForeignKey)
@@ -21,7 +24,10 @@ def _parse_foreign_key_index(self:generator.Generator, expression: exp.Expressio
                 index_name = index_name.replace('\"', '')
                 index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
                 expression.parent.parent.add_foreign_key_index(index_foreign_key_sql)
-                alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD {expression}"
+                if schema_name is not "" or schema_name is not None:
+                    alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD {expression}"
+                else:
+                    alter_table = f"ALTER TABLE {tbl_name} ADD {expression}"
                 expression.parent.parent.add_foreign_key_constraint(alter_table)
                 if generator.exclude_fk_constraint:
                     return None
