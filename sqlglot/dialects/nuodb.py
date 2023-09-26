@@ -24,7 +24,7 @@ def _parse_foreign_key_index(self:generator.Generator, expression: exp.Expressio
                 index_name = index_name.replace('\"', '')
                 index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
                 expression.parent.parent.add_foreign_key_index(index_foreign_key_sql)
-                if schema_name is not "" or schema_name is not None:
+                if schema_name != "" or schema_name is not None:
                     alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD {expression}"
                 else:
                     alter_table = f"ALTER TABLE {tbl_name} ADD {expression}"
