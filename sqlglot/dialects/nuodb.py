@@ -5,12 +5,14 @@ from sqlglot.dialects.dialect import (Dialect, no_properties_sql,no_comment_colu
 from sqlglot.tokens import Tokenizer, TokenType, Token
 
 
+global schema_name
 
-
-def _parse_foreign_key_index(self: generator.Generator,expression: exp.Expression) -> str:
+def _parse_foreign_key_index(self:generator.Generator, expression: exp.Expression) -> str:
     if isinstance(expression.parent.parent, exp.Create):
+        global schema_name
         foreign_key_expression = expression.find_all(exp.ForeignKey)
         index_foreign_key_sql= ""
+        alter_table= ""
         if foreign_key_expression:
             for fk in foreign_key_expression:
                 tbl_name = expression.parent.args["this"]
@@ -18,7 +20,13 @@ def _parse_foreign_key_index(self: generator.Generator,expression: exp.Expressio
                 index_name = f"{tbl_name}_{column_name}"
                 index_name = index_name.replace('\"', '')
                 index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
-                expression.parent.parent.set("foreign_key_index", index_foreign_key_sql)
+                expression.parent.parent.add_foreign_key_index(index_foreign_key_sql)
+                alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD {expression}"
+                expression.parent.parent.add_foreign_key_constraint(alter_table)
+                if generator.exclude_fk_constraint:
+                    return None
+
+
 
     if isinstance(expression.parent, exp.AlterTable):
         foreign_key_expression = expression.find_all(exp.ForeignKey)
@@ -52,6 +60,8 @@ def replace_db_to_schema( expression: exp.Expression) ->exp.Expression:
     ):
         expression = expression.copy()
         expression.args["kind"] = "SCHEMA"
+        global schema_name
+        schema_name = expression.args["this"]
     return expression
 
 def _parse_unique(self: generator.Generator, expression : exp.Expression) ->str:
@@ -179,9 +189,9 @@ class NuoDB(Dialect):
                     exp.ColumnConstraint : transforms.preprocess([_remove_collate]),
                     exp.Properties: no_properties_sql,
                     exp.UniqueColumnConstraint: _parse_unique,
-                    exp.Constraint: _parse_foreign_key_index,
                     exp.CommentColumnConstraint: no_comment_column_constraint_sql,
-                    exp.AddConstraint: _parse_foreign_key_index
+                    exp.AddConstraint: _parse_foreign_key_index,
+                    exp.Constraint: _parse_foreign_key_index,
 
                     }
         TYPE_MAPPING = {

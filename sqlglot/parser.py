@@ -3544,16 +3544,6 @@ class Parser(metaclass=_Parser):
 
             options[kind] = action
 
-        # index_name = f"{reference}_FK_index"  # Modify this to your naming convention
-        # index_foreign_key_sql = f"CREATE INDEX"
-        # print("index sql-->", index_foreign_key_sql)
-        # foreign_key_exp = self.expression(
-        #     exp.ForeignKey, expressions=expressions, reference=reference, **options  # type: ignore
-        # )
-        # index_exp = self.expression(exp.ForeignKeyIndex, expressions = [index_foreign_key_sql], this = True)
-
-        # foreign_key_exp.set("index", index_foreign_key_sql)
-        # return foreign_key_exp
         return self.expression(
             exp.ForeignKey, expressions=expressions, reference=reference, **options  # type: ignore
         )

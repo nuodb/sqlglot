@@ -11,7 +11,9 @@ from sqlglot.tokens import TokenType
 
 logger = logging.getLogger("sqlglot")
 
-global need_fk_for_index
+global need_fk_for_index, exclude_fk_constraint
+need_fk_for_index = False
+exclude_fk_constraint = False
 class Generator:
     """
     Generator converts a given syntax tree to the corresponding SQL string.
@@ -320,6 +322,7 @@ class Generator:
         max_text_width: int = 80,
         comments: bool = True,
         fk_index: bool = False,
+        fk_constraint_in_create: bool = False,
     ):
         import sqlglot
 
@@ -362,12 +365,17 @@ class Generator:
             The SQL string corresponding to `expression`.
         """
         global need_fk_for_index
+        global exclude_fk_constraint
         fk_index = opts.get("fk_index")
+        fk_constraint_in_create = opts.get("fk_constraint_in_create")
         if fk_index is not None:
             need_fk_for_index = fk_index
+        if fk_constraint_in_create is not None:
+            exclude_fk_constraint = fk_constraint_in_create
+
+
         if cache is not None:
             self._cache = cache
-
         self.unsupported_messages = []
         sql = self.sql(expression).strip()
         self._cache = None
@@ -574,7 +582,6 @@ class Generator:
         constraints = f" {constraints}" if constraints else ""
         position = self.sql(expression, "position")
         position = f" {position}" if position else ""
-
         return f"{exists}{column}{kind}{constraints}{position}"
 
     def columnconstraint_sql(self, expression: exp.ColumnConstraint) -> str:
@@ -729,10 +736,40 @@ class Generator:
 
         expression_sql = f"CREATE{modifiers} {kind}{exists_sql} {this}{properties_sql}{expression_sql}{postexpression_props_sql}{index_sql}{no_schema_binding}{clone}"
         create_table_exp = self.prepend_ctes(expression, expression_sql)
+        global need_fk_for_index
+        global exclude_fk_constraint
+
         if need_fk_for_index:
-            if expression.args.get("foreign_key_index"):
-                foreign_exp = expression.args.get("foreign_key_index")
-                create_table_exp += ";\n" + foreign_exp
+            foreign_key_ind = expression.foreign_key_index
+            if foreign_key_ind:
+                for index_sql in foreign_key_ind:
+                    create_table_exp += ";\n" + index_sql
+
+        if exclude_fk_constraint is True:
+            alter_fk_constraint = expression.foreign_key_constraint
+            # print("alter_fk_constraint-->", alter_fk_constraint)
+            if alter_fk_constraint:
+                for constraint_sql in alter_fk_constraint:
+                    # print("constraint_sql", constraint_sql)
+                    create_table_exp += ";\n" + constraint_sql
+
+        # if need_fk_for_index:
+        #     foreign_key_ind = expression.foreign_key_index
+        #     if foreign_key_ind:
+        #         foreign_exp = ";\n".join(foreign_key_ind)
+        #         create_table_exp += ";\n" + foreign_exp
+
+        # if exclude_fk_constraint is True:
+        #     alter_fk_constraint = expression.foreign_key_constraint
+        #     print("alter_fk_constraint", alter_fk_constraint)
+        #     if alter_fk_constraint:
+        #         alter_table_exp = ";\n".join(alter_fk_constraint)
+        #         create_table_exp += ";\n" + alter_table_exp
+
+        # if exclude_fk_constraint is True:
+        #     if expression.args.get("foreign_key_constraint"):
+        #         alter_table_fk_constraint = expression.args.get("foreign_key_constraint")
+        #         create_table_exp += ";\n" + alter_table_fk_constraint
         return create_table_exp
 
 
@@ -2332,9 +2369,13 @@ class Generator:
                         f"{prefix}{sql}{stripped_sep if i + 1 < num_sqls else ''}{comments}"
                     )
             else:
-                result_sqls.append(f"{prefix}{sql}{comments}{sep if i + 1 < num_sqls else ''}")
-
+                # added the if part for the sql ends with comma
+                if sql is not None:
+                    result_sqls.append(f"{prefix}{sql}{comments}{sep if i + 1 < num_sqls else ''}")
         result_sql = "\n".join(result_sqls) if self.pretty else "".join(result_sqls)
+        # added if the sql ends with comma
+        if result_sql.endswith(sep):
+            result_sql = result_sql.rstrip(sep)
         return self.indent(result_sql, skip_first=False) if indent else result_sql
 
     def op_expressions(self, op: str, expression: exp.Expression, flat: bool = False) -> str:
