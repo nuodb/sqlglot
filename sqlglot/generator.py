@@ -741,35 +741,19 @@ class Generator:
 
         if need_fk_for_index:
             foreign_key_ind = expression.foreign_key_index
-            if foreign_key_ind:
+            if foreign_key_ind and foreign_key_ind != "":
                 for index_sql in foreign_key_ind:
-                    create_table_exp += ";\n" + index_sql
+                    if index_sql!="":
+                        create_table_exp += ";\n" + index_sql
 
         if exclude_fk_constraint is True:
             alter_fk_constraint = expression.foreign_key_constraint
-            # print("alter_fk_constraint-->", alter_fk_constraint)
             if alter_fk_constraint:
                 for constraint_sql in alter_fk_constraint:
-                    # print("constraint_sql", constraint_sql)
-                    create_table_exp += ";\n" + constraint_sql
+                    if constraint_sql!= "":
+                        create_table_exp += ";\n" + constraint_sql
 
-        # if need_fk_for_index:
-        #     foreign_key_ind = expression.foreign_key_index
-        #     if foreign_key_ind:
-        #         foreign_exp = ";\n".join(foreign_key_ind)
-        #         create_table_exp += ";\n" + foreign_exp
 
-        # if exclude_fk_constraint is True:
-        #     alter_fk_constraint = expression.foreign_key_constraint
-        #     print("alter_fk_constraint", alter_fk_constraint)
-        #     if alter_fk_constraint:
-        #         alter_table_exp = ";\n".join(alter_fk_constraint)
-        #         create_table_exp += ";\n" + alter_table_exp
-
-        # if exclude_fk_constraint is True:
-        #     if expression.args.get("foreign_key_constraint"):
-        #         alter_table_fk_constraint = expression.args.get("foreign_key_constraint")
-        #         create_table_exp += ";\n" + alter_table_fk_constraint
         return create_table_exp
 
 
