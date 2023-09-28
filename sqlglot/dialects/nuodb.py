@@ -17,30 +17,37 @@ def _parse_foreign_key_index(self:generator.Generator, expression: exp.Expressio
         key_name = ""
         foreign_key_expression = expression.find_all(exp.ForeignKey)
         Key_constraint_index = expression.parent.parent.find_all(exp.KeyColumnConstraintForIndex)
+        key_col_map = {}
+
+        for k in Key_constraint_index:
+            idx_name = str(k.args.get("keyname"))
+            key_name = k.args["colname"]
+            key_name = key_name.this
+            key_col_map[str(idx_name)] = str(key_name)
+
+
         if foreign_key_expression:
             for fk in foreign_key_expression:
-                for k in  Key_constraint_index:
-                    idx_name = k.args.get("keyname")
-                    key_name = k.args["colname"]
-                    key_name = key_name.this
                 tbl_name = expression.parent.args["this"]
                 column_name = fk.args["expressions"][0]
                 index_name = f"{tbl_name}_{column_name}"
                 index_name = index_name.replace('\"', '')
-                if str(column_name) == str(key_name):
-                    index_foreign_key_sql = ""
-                else:
-                    index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
-                expression.parent.parent.add_foreign_key_index(index_foreign_key_sql)
-                if str(column_name) == str(key_name):
-                    alter_table = ""
-                else:
-                    if schema_name != "" or schema_name is not None:
-                        alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD {expression}"
-                    else:
-                        alter_table = f"ALTER TABLE {tbl_name} ADD {expression}"
-                expression.parent.parent.add_foreign_key_constraint(alter_table)
+                constraint_name = expression.args["this"]
 
+                for idx_name, key_name in key_col_map.items():
+                    if str(column_name) == str(key_name) or str(idx_name) == str(constraint_name):
+                        index_foreign_key_sql = ""
+                        alter_table = ""
+                        break
+                    else:
+                        index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
+
+                        if schema_name:
+                            alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD {expression}"
+                        else:
+                            alter_table = f"ALTER TABLE {tbl_name} ADD {expression}"
+                expression.parent.parent.add_foreign_key_index(index_foreign_key_sql)
+                expression.parent.parent.add_foreign_key_constraint(alter_table)
 
 
     if isinstance(expression.parent, exp.AlterTable):
