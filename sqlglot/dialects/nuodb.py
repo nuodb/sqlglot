@@ -8,8 +8,8 @@ from sqlglot.tokens import Tokenizer, TokenType, Token
 global schema_name
 schema_name = None
 
-def _parse_foreign_key_index(self:generator.Generator, expression: exp.Expression) -> str:
 
+def _parse_foreign_key_index(self: generator.Generator, expression: exp.Expression) -> str:
     if isinstance(expression.parent.parent, exp.Create):
         global schema_name
         index_foreign_key_sql= ""
@@ -24,8 +24,6 @@ def _parse_foreign_key_index(self:generator.Generator, expression: exp.Expressio
             key_name = k.args["colname"]
             key_name = key_name.this
             key_col_map[str(idx_name)] = str(key_name)
-
-
         if foreign_key_expression:
             for fk in foreign_key_expression:
                 tbl_name = expression.parent.args["this"]
@@ -33,22 +31,28 @@ def _parse_foreign_key_index(self:generator.Generator, expression: exp.Expressio
                 index_name = f"{tbl_name}_{column_name}"
                 index_name = index_name.replace('\"', '')
                 constraint_name = expression.args["this"]
-
-                for idx_name, key_name in key_col_map.items():
-                    if str(column_name) == str(key_name) or str(idx_name) == str(constraint_name):
-                        index_foreign_key_sql = ""
-                        alter_table = ""
-                        break
-                    else:
-                        index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
-
-                        if schema_name:
-                            alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD {expression}"
+                if len(key_col_map) !=0:
+                    for idx_name, key_name in key_col_map.items():
+                        if str(column_name) == str(key_name) or str(idx_name) == str(constraint_name):
+                            index_foreign_key_sql = ""
+                            alter_table = ""
+                            break
                         else:
-                            alter_table = f"ALTER TABLE {tbl_name} ADD {expression}"
+                            index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
+
+                            if schema_name:
+                                alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD {expression}"
+                            else:
+                                alter_table = f"ALTER TABLE {tbl_name} ADD {expression}"
+                else:
+                    index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
+                    if schema_name:
+                                alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD {expression}"
+                    else:
+                        alter_table = f"ALTER TABLE {tbl_name} ADD {expression}"
+
                 expression.parent.parent.add_foreign_key_index(index_foreign_key_sql)
                 expression.parent.parent.add_foreign_key_constraint(alter_table)
-
 
     if isinstance(expression.parent, exp.AlterTable):
         foreign_key_expression = expression.find_all(exp.ForeignKey)
@@ -61,11 +65,10 @@ def _parse_foreign_key_index(self:generator.Generator, expression: exp.Expressio
                 index_name = index_name.replace('\"', '')
                 index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
                 expression.parent.set("foreign_key_index", index_foreign_key_sql)
-
     if generator.exclude_fk_constraint:
         return None
-    else:
-        return expression
+
+    return expression
 
 def _auto_increment_to_generated_by_default(expression: exp.Expression) -> exp.Expression:
 
