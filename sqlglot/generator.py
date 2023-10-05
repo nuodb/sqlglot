@@ -618,7 +618,8 @@ class Generator:
         maxvalue = f" MAXVALUE {maxvalue}" if maxvalue else ""
         cycle = expression.args.get("cycle")
         cycle_sql = ""
-
+        stored = ""
+        stored =expression.args.get("stored")
         if cycle is not None:
             cycle_sql = f"{' NO' if not cycle else ''} CYCLE"
             cycle_sql = cycle_sql.strip() if not start and not increment else cycle_sql
@@ -631,7 +632,7 @@ class Generator:
         expr = self.sql(expression, "expression")
         expr = f"({expr})" if expr else "IDENTITY"
 
-        return f"GENERATED{this}AS {expr}{sequence_opts}"
+        return f"GENERATED{this}AS {expr}{sequence_opts} {stored}"
 
     def notnullcolumnconstraint_sql(self, expression: exp.NotNullColumnConstraint) -> str:
         return f"{'' if expression.args.get('allow_null') else 'NOT '}NULL"
