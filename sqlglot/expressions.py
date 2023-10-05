@@ -991,8 +991,20 @@ class Create(Expression):
         "no_schema_binding": False,
         "begin": False,
         "clone": False,
-        "foreign_key_index": False
+        "foreign_key_index": False,
+        "foreign_key_constraint": False,
     }
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.foreign_key_index = []
+        self.foreign_key_constraint = []
+
+    def add_foreign_key_index(self, index_sql):
+        self.foreign_key_index.append(index_sql)
+
+    def add_foreign_key_constraint(self, comnstraint_sql):
+        self.foreign_key_constraint.append(comnstraint_sql)
+
 
 
 # https://docs.snowflake.com/en/sql-reference/sql/create-clone
