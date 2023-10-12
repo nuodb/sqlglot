@@ -1017,6 +1017,10 @@ class Clone(Expression):
     }
 
 
+class UnsupportedNuodb(Expression):
+    arg_types={"this": False, "message": False, "expression": False}
+
+
 class Describe(Expression):
     arg_types = {"this": True, "kind": False}
 
@@ -1273,8 +1277,10 @@ class GeneratedAsIdentityColumnConstraint(ColumnConstraintKind):
         "minvalue": False,
         "maxvalue": False,
         "cycle": False,
-        "stored": False
+        "stored": False,
+
     }
+
 
 
 class InlineLengthColumnConstraint(ColumnConstraintKind):
@@ -2013,7 +2019,14 @@ class OnCommitProperty(Property):
 
 
 class PartitionedByProperty(Property):
-    arg_types = {"this": True}
+    # arg_types = {"this": True}
+    arg_types = {"this": False,
+                 "main_partition":True,
+                 "type": False,
+                 "subpartition": False,
+                 "subpart_exp": False,
+                 "count_partitions": False,
+                 }
 
 
 class ReturnsProperty(Property):
