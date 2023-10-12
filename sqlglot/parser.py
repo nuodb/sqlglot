@@ -3409,6 +3409,9 @@ class Parser(metaclass=_Parser):
 
             self._match_r_paren()
 
+        storage = self._parse_bitwise()
+        if storage:
+            this.set("stored", storage)
         return this
 
     def _parse_inline(self) -> exp.InlineLengthColumnConstraint:

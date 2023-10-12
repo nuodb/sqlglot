@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 from sqlglot import exp, generator, parser, tokens, transforms
-from sqlglot.dialects.dialect import (Dialect, no_properties_sql,no_comment_column_constraint_sql)
+from sqlglot.dialects.dialect import (Dialect,no_comment_column_constraint_sql)
 from sqlglot.tokens import Tokenizer, TokenType, Token
 
 
 global schema_name
 schema_name = None
 
+
+
+def no_properties_sql(self: generator.Generator, expression: exp.Properties) -> str:
+    if isinstance(expression, exp.PartitionedByProperty):
+        return ""
+    self.unsupported("Properties unsupported")
+    return ""
 
 def _parse_foreign_key_index(self: generator.Generator, expression: exp.Expression) -> str:
     if isinstance(expression.parent.parent, exp.Create):
@@ -18,6 +25,14 @@ def _parse_foreign_key_index(self: generator.Generator, expression: exp.Expressi
         foreign_key_expression = expression.find_all(exp.ForeignKey)
         Key_constraint_index = expression.parent.parent.find_all(exp.KeyColumnConstraintForIndex)
         key_col_map = {}
+
+        ref_key_index = expression.find_all(exp.Reference)
+        if ref_key_index:
+            for r in ref_key_index:
+                options_list = r.args.get("options", [])
+                if options_list and len(options_list) > 0:
+                    first_option = options_list[0]
+                    r.args["options"] = [first_option]
 
         for k in Key_constraint_index:
             idx_name = str(k.args.get("keyname"))
@@ -251,6 +266,7 @@ class NuoDB(Dialect):
             exp.CharacterSetProperty: exp.Properties.Location.UNSUPPORTED,
             exp.CollateProperty: exp.Properties.Location.UNSUPPORTED,
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
+            exp.PartitionedByProperty: exp.Properties.Location.POST_EXPRESSION,
         }
 
         def exclusivelock_sql(self, expression: exp.ExclusiveLock) -> str:
