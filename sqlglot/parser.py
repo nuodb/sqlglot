@@ -1573,10 +1573,108 @@ class Parser(metaclass=_Parser):
 
     def _parse_partitioned_by(self) -> exp.PartitionedByProperty:
         self._match(TokenType.EQ)
+        subpartition_exp_list = []
+        subpartition = False
+        type = ""
+        partition_name = ""
+        subpartition_name = ""
+        values = ""
+        subpart_range = ""
+        storage_engine = ""
+        found_str_engine = False
+        expr = ""
+        count_partitions= 1
+
+        if self._match_texts("LIST"):
+            type="LIST"
+            if self._match(TokenType.L_PAREN):
+                expr = self._parse_schema() or self._parse_bracket(self._parse_field())
+                self._match(TokenType.R_PAREN)
+            else:
+                expr = self._parse_schema() or self._parse_bracket(self._parse_field())
+            main_part = expr
+
+        if self._match_texts("RANGE"):
+            type="RANGE"
+            if self._match_texts("COLUMNS"):
+                type="RANGE COLUMNS"
+                unsuported =  exp.UnsupportedNuodb(this=True, message="Range column partition is not supported", expression=self.expression)
+                self.raise_error(unsuported)
+
+            if self._match(TokenType.L_PAREN):
+                expr = self._parse_schema() or self._parse_bracket(self._parse_field())
+                self._match(TokenType.R_PAREN)
+            else:
+                expr = self._parse_schema() or self._parse_bracket(self._parse_field())
+            main_part = expr
+
+        if self._match_texts("KEY"):
+            type="KEY"
+            if self._match(TokenType.L_PAREN):
+                expr = self._parse_bitwise()
+                self._match(TokenType.R_PAREN)
+            else:
+                expr = self._parse_schema() or self._parse_bracket(self._parse_bitwise())
+            if expr:
+                main_part = expr
+            else:
+                main_part = ""
+
+            if self._match_texts("PARTITIONS"):
+                count_partitions = str(self._parse_schema() or self._parse_bracket(self._parse_field()))
+
+        if self._match_texts("HASH"):
+            type="HASH"
+            expr = self._parse_schema() or self._parse_bracket(self._parse_field())
+            main_part = expr
+            if self._match_texts("PARTITIONS"):
+                count_partitions = str(self._parse_schema() or self._parse_bracket(self._parse_field()))
+
+        #parsing sub-partitions
+        if self._match(TokenType.L_PAREN):
+            subpartition = True
+            while self._match_texts("PARTITION") and self._next:
+                subpartition_exp = ""
+                partition_name = self._parse_bitwise()
+                subpartition_name = partition_name
+                if self._match_texts("VALUES"):
+                    if self._match_text_seq("LESS", "THAN"):
+                        subpart_range= "LESS THAN"
+                        if self._match(TokenType.L_PAREN):
+                            values = f"({self._parse_bitwise()})"
+                            self._match(TokenType.R_PAREN)
+                        else:
+                            values = f"({self._parse_bitwise()})"
+                    if self._match_text_seq("MORE", "THAN"):
+                        values = self._parse_schema() or self._parse_bracket(self._parse_field())
+                        subpart_range = "MORE THAN"
+                    if self._match_texts("IN"):
+                        subpart_range = "IN"
+                        values = self._parse_schema() or self._parse_bracket(self._parse_field())
+                if self._match_text_seq("STORE", "IN"):
+                    found_str_engine = True
+                    storage_engine = self._parse_schema() or self._parse_bracket(self._parse_field())
+                    if storage_engine is None:
+                        storage_engine = "UNPARTITONED"
+                if storage_engine is None or found_str_engine is False:
+                    storage_engine = "UNPARTITIONED"
+
+                subpartition_exp = f"PARTITION {subpartition_name} VALUES {subpart_range} {values} STORE IN {storage_engine}"
+                subpartition_exp_list.append(subpartition_exp)
+                self._match(TokenType.COMMA)
+            self._match(TokenType.R_PAREN)
+
+
         return self.expression(
             exp.PartitionedByProperty,
-            this=self._parse_schema() or self._parse_bracket(self._parse_field()),
+            this=expr,
+            main_partition=main_part,
+            type=type,
+            subpartition=subpartition,
+            subpart_exp=subpartition_exp_list,
+            count_partitions=count_partitions,
         )
+
 
     def _parse_withdata(self, no: bool = False) -> exp.WithDataProperty:
         if self._match_text_seq("AND", "STATISTICS"):

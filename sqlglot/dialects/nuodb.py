@@ -97,7 +97,83 @@ def _auto_increment_to_generated_by_default(expression: exp.Expression) -> exp.E
     return expression
 
 
-def replace_db_to_schema( expression: exp.Expression) ->exp.Expression:
+def _parse_partition_hash(self: generator.Generator, expression: exp.Expression):
+    schema = expression.this
+    partition_exp = expression.find_all(exp.PartitionedByProperty)
+    for p in partition_exp:
+        col_name = p.args["this"]
+        partition_col_name = f"p_{col_name}"
+        partition_col = exp.ColumnDef(this=partition_col_name, kind= "INT")
+        partition_col.append("constraints", exp.ColumnConstraint(kind = exp.GeneratedAsIdentityColumnConstraint(this=True, expression=f"{col_name}%4", stored="PERSISTED")))
+        schema.append("expressions", partition_col)
+        p.args["this"] = f"({partition_col_name})"
+        count_partitions = p.args["count_partitions"]
+        sub_part_list = []
+        for i in range(0,int(count_partitions)):
+            part_name = f"p{i}"
+            sub_exp = f"PARTITION {part_name} VALUES IN ({i}) STORE IN UNPARTITIONED"
+            sub_part_list.append(sub_exp)
+        p.args["subpart_exp"] = sub_part_list
+        p.args["type"] = "LIST"
+        p.args["subpartition"] = True
+
+
+def _parse_partition_key(self: generator.Generator, expression: exp.Expression):
+    schema = expression.this
+    primaryKey_exp = expression.find_all(exp.PrimaryKey)
+    uniqueKey_exp = expression.find_all(exp.UniqueColumnConstraint)
+
+    partition_exp = expression.find_all(exp.PartitionedByProperty)
+    partition_key_column_name = ""
+    if primaryKey_exp:
+        for prim in primaryKey_exp:
+            if prim:
+                prim_this = prim.args["expressions"][0]
+                partition_key_column_name = f"({prim_this})"
+
+    if partition_key_column_name == "":
+        for unique in uniqueKey_exp:
+            partition_key_column_name = f"{unique.this}"
+
+    for p in partition_exp:
+        part_col = p.args["main_partition"]
+        count_partitions = p.args["count_partitions"]
+        if part_col:
+            partition_key_column_name = part_col
+        sub_part_list = []
+        for i in range(0,int(count_partitions)):
+            part_name = f"p{i}"
+            sub_exp = f"PARTITION {part_name} VALUES IN ({i}) STORE IN UNPARTITIONED"
+            sub_part_list.append(sub_exp)
+        p.args["type"] = "LIST"
+        p.args["subpartition"] = True
+        p.args["subpart_exp"] = sub_part_list
+        if part_col:
+            p.args["main_partition"] =  f"{partition_key_column_name}"
+        else:
+            p.args["main_partition"] =  f"{partition_key_column_name}"
+
+
+def _parse_partition_range(self: generator.Generator, expression: exp.Expression):
+    schema = expression.this
+    processed_functions = set()
+    partition_exp = expression.find_all(exp.PartitionedByProperty)
+    for p in partition_exp:
+        function_exp = p.find_all(exp.Func)
+        if function_exp:
+            for fun in function_exp:
+                col_name = fun.args["this"]
+                partition_col_name = f"p_{col_name}"
+                if fun in processed_functions:
+                    continue
+                partition_column = exp.ColumnDef(this=partition_col_name, kind="INT")
+                partition_column.append("constraints", exp.ColumnConstraint(kind = exp.GeneratedAsIdentityColumnConstraint(this=True, expression=fun, stored="PERSISTED")))
+                schema.append("expressions", partition_column)
+                p.args["this"] = f"({partition_col_name})"
+                p.args["main_partition"] = partition_col_name
+                processed_functions.add(fun)
+
+def replace_db_to_schema(self: generator,expression: exp.Expression) ->exp.Expression:
     if (
         isinstance(expression, (exp.Create))
         and expression.args["kind"] == "DATABASE"
@@ -106,7 +182,30 @@ def replace_db_to_schema( expression: exp.Expression) ->exp.Expression:
         expression.args["kind"] = "SCHEMA"
         global schema_name
         schema_name = expression.args["this"]
-    return expression
+
+
+    has_schema = isinstance(expression.this, exp.Schema)
+    is_partitionable = expression.args.get("kind") in ("TABLE", "VIEW")
+
+    if(isinstance(expression, exp.Create)) and is_partitionable:
+        partition_exp = expression.find_all(exp.PartitionedByProperty)
+        for p in partition_exp:
+            if p.args["type"] == "RANGE":
+                _parse_partition_range(self, expression)
+            if p.args["type"] == "LIST":
+                _parse_partition_range(self, expression)
+            if p.args["type"] == "HASH":
+                _parse_partition_hash(self, expression)
+            if p.args["type"] == "KEY":
+                _parse_partition_key(self, expression)
+            if p.args["type"]  == "RANGE COLUMNS":
+                if self.sql(expression, "this"):
+                    self.unsupported("Hints are not supported")
+                    return ""
+
+    return self.create_sql(expression)
+
+
 
 def _parse_unique(self: generator.Generator, expression : exp.Expression) ->str:
     unique = expression.find_all(exp.UniqueColumnConstraint)
@@ -229,14 +328,13 @@ class NuoDB(Dialect):
     class Generator(generator.Generator):
         TRANSFORMS = {**generator.Generator.TRANSFORMS,
                     exp.ColumnDef: transforms.preprocess([_auto_increment_to_generated_by_default]),
-                    exp.Create: transforms.preprocess([replace_db_to_schema]),
+                    exp.Create: replace_db_to_schema,
                     exp.ColumnConstraint : transforms.preprocess([_remove_collate]),
                     exp.Properties: no_properties_sql,
-                    exp.UniqueColumnConstraint: _parse_unique,
+                    # exp.UniqueColumnConstraint: _parse_unique,
                     exp.CommentColumnConstraint: no_comment_column_constraint_sql,
                     exp.AddConstraint: _parse_foreign_key_index,
                     exp.Constraint: _parse_foreign_key_index,
-
                     }
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
@@ -268,6 +366,18 @@ class NuoDB(Dialect):
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
             exp.PartitionedByProperty: exp.Properties.Location.POST_EXPRESSION,
         }
+
+
+        def partitionedbyproperty_sql(self, expression: exp.PartitionedByProperty) -> str:
+            type = expression.args["type"]
+            subpart_exp = expression.args["subpart_exp"]
+            main_partition = expression.args["main_partition"]
+            if expression.args["subpartition"] and subpart_exp:
+                subpart_sql = ",\n".join(subpart_exp)
+                subpart_sql = f"\n{subpart_sql}\n"
+            else:
+                subpart_sql = ""
+            return f"PARTITION BY {type} ({main_partition}) ({subpart_sql})"
 
         def exclusivelock_sql(self, expression: exp.ExclusiveLock) -> str:
             kind = self.sql(expression, "kind")

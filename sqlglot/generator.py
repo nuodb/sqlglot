@@ -648,6 +648,12 @@ class Generator:
         this = f" {this}" if this else ""
         return f"UNIQUE{this}"
 
+    def unsupportednuodb_sql(self, expression: exp.UnsupportedNuodb) -> str:
+            unsupported_feature = expression.args["this"]
+            if unsupported_feature:
+                message = expression.args["message"]
+            return message
+
     def createable_sql(
         self, expression: exp.Create, locations: dict[exp.Properties.Location, list[exp.Property]]
     ) -> str:
