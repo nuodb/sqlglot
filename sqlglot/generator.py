@@ -539,6 +539,17 @@ class Generator:
         exists_sql = " IF EXISTS" if expression.args.get("exists") else ""
         return f"UNCACHE TABLE{exists_sql} {table}"
 
+    def keycolumnconstraintforindex_sql(self, expression: exp.KeyColumnConstraintForIndex) -> str:
+        exp = expression.args.get("expression")
+        desc = expression.args.get("desc")
+        key_name = expression.args.get("keyname")
+        col_name = expression.args.get("colname")
+        opts= expression.args.get("options")
+        if opts is False:
+            return f"KEY {key_name} {col_name}"
+        else:
+            return f"KEY {key_name} {col_name} {opts}"
+
     def cache_sql(self, expression: exp.Cache) -> str:
         lazy = " LAZY" if expression.args.get("lazy") else ""
         table = self.sql(expression, "this")
