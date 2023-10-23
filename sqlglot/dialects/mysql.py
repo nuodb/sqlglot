@@ -132,6 +132,9 @@ class MySQL(Dialect):
             "MEDIUMTEXT": TokenType.MEDIUMTEXT,
             "TINYTEXT": TokenType.TINYTEXT,
             "MEDIUMINT": TokenType.MEDIUMINT,
+            "POINT" : TokenType.POINT,
+            "INT UNSIGNED": TokenType.INT_UNSIGNED,
+            "SMALLINT UNSIGNED": TokenType.SMALLINT_UNSIGNED,
             "SEPARATOR": TokenType.SEPARATOR,
             "ENUM": TokenType.ENUM,
             "START": TokenType.BEGIN,
@@ -282,6 +285,8 @@ class MySQL(Dialect):
         CONSTRAINT_PARSERS = {
             **parser.Parser.CONSTRAINT_PARSERS,
             "KEY": lambda self: self._parse_key_index(),
+            "SPATIAL KEY": lambda self: self._parse_spatial_key(),
+            "FULLTEXT KEY": lambda self: self._parse_fulltext_key(),
         }
 
         PROFILE_TYPES = {
@@ -413,6 +418,22 @@ class MySQL(Dialect):
               | [LOW_PRIORITY] WRITE
           }
         """
+
+        def _parse_spatial_key(self) -> exp.SpatialKey:
+            self._match(TokenType.SPATIAL_KEY)
+            spatialkey_name = self._parse_id_var()
+            spatial_col_name = self._parse_bitwise()
+
+            return self.expression(exp.SpatialKey, this=True, spatialkeyname=spatialkey_name,spatialcolname=spatial_col_name )
+
+        def _parse_fulltext_key(self) -> exp.FullTextKey:
+            self._match(TokenType.FULLTEXT_KEY)
+            keyname = self._parse_id_var()
+            colname = self._parse_bitwise()
+
+            return self.expression(exp.FullTextKey, this=True,keyname=keyname, colname=colname )
+
+
         def _parse_key_index(self) ->exp.KeyColumnConstraintForIndex:
             self._match(TokenType.KEY)
             desc = False

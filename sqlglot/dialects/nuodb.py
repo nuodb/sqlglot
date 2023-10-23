@@ -3,13 +3,20 @@ from __future__ import annotations
 from sqlglot import exp, generator, parser, tokens, transforms
 from sqlglot.dialects.dialect import (Dialect,no_comment_column_constraint_sql)
 from sqlglot.tokens import Tokenizer, TokenType, Token
-import re
+from sqlglot.errors import UnsupportedError
 
 
 global schema_name
 schema_name = None
 
 
+
+def _parse_fulltext_key(self: generator.Generator, expression: exp.Expression) -> exp.Expression:
+    self.unsupported("FULLTEXT KEY is not supported in NuoDB")
+
+def _parse_spatial_key(self: generator.Generator, expression: exp.Expression) -> exp.Expression:
+    #NuoDB doesn't support Spatial key, so just returning it as Null
+    raise UnsupportedError("SPATIAL KEY is not supported in NuoDB")
 
 #prefix index
 def _parse_key_constraint(self: generator.Generator, expression: exp.Expression, k:exp.Expression) -> str:
@@ -118,9 +125,11 @@ def _auto_increment_to_generated_by_default(expression: exp.Expression) -> exp.E
     auto = expression.find(exp.AutoIncrementColumnConstraint)
     if auto:
         expression = expression.copy()
+        constraints = expression.args["constraints"]
         expression.args["constraints"].remove(auto.parent)
-        if auto is not None:
-            expression.append("constraints", exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=False)))
+        generated = exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=False, stored=False))
+        if generated not in constraints:
+            constraints.insert(0, generated)
 
     return expression
 
@@ -368,6 +377,9 @@ class NuoDB(Dialect):
                     exp.CommentColumnConstraint: no_comment_column_constraint_sql,
                     exp.AddConstraint: _parse_foreign_key_index,
                     exp.Constraint: _parse_foreign_key_index,
+                    exp.SpatialKey: _parse_spatial_key,
+                    exp.UniqueColumnConstraint: _parse_unique,
+                    exp.FullTextKey: _parse_fulltext_key,
                     }
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
@@ -376,7 +388,11 @@ class NuoDB(Dialect):
             exp.DataType.Type.TINYTEXT: "VARCHAR(255)",
             exp.DataType.Type.INT: "INTEGER",
             exp.DataType.Type.JSON: "TEXT",
-            exp.DataType.Type.VARBINARY : "BLOB"
+            exp.DataType.Type.VARBINARY : "BLOB",
+            exp.DataType.Type.POINT: "TEXT",
+            exp.DataType.Type.INT_UNSIGNED: "BIGINT",
+            exp.DataType.Type.SMALLINT_UNSIGNED: "SMALLINT",
+            exp.DataType.Type.SMALLINT: "SMALLINT",
 
             # ? Revise below and add
             # exp.DataType.Type.TINYINT: "INT64",

@@ -156,6 +156,9 @@ class Generator:
         exp.DataType.Type.MEDIUMBLOB: "BLOB",
         exp.DataType.Type.LONGBLOB: "BLOB",
         exp.DataType.Type.INET: "INET",
+        exp.DataType.Type.POINT: "POINT",
+        exp.DataType.Type.INT_UNSIGNED: "INT UNSIGNED",
+        exp.DataType.Type.SMALLINT_UNSIGNED: "SMALLINT UNSIGNED"
     }
 
     STAR_MAPPING = {
@@ -550,6 +553,17 @@ class Generator:
         else:
             return f"KEY {key_name} {col_name} {opts}"
 
+
+    def spatialkey_sql(self, expression: exp.SpatialKey) -> str:
+        spatialkeyname = expression.args.get("spatialkeyname")
+        spatialcolname = expression.args.get("spatialcolname")
+        return f"SPATIAL KEY {spatialkeyname} {spatialcolname}"
+
+    def fulltextkey_sql(self, expression: exp.FullTextKey) -> str:
+        keyname = expression.args.get("keyname")
+        colname = expression.args.get("colname")
+        return f"FULLTEXT {keyname} {colname}"
+
     def cache_sql(self, expression: exp.Cache) -> str:
         lazy = " LAZY" if expression.args.get("lazy") else ""
         table = self.sql(expression, "this")
@@ -629,7 +643,7 @@ class Generator:
         maxvalue = f" MAXVALUE {maxvalue}" if maxvalue else ""
         cycle = expression.args.get("cycle")
         cycle_sql = ""
-        stored = ""
+        stored = None
         stored =expression.args.get("stored")
         if cycle is not None:
             cycle_sql = f"{' NO' if not cycle else ''} CYCLE"
@@ -642,8 +656,10 @@ class Generator:
 
         expr = self.sql(expression, "expression")
         expr = f"({expr})" if expr else "IDENTITY"
-
-        return f"GENERATED{this}AS {expr}{sequence_opts} {stored}"
+        if stored or stored is False:
+            return f"GENERATED{this}AS {expr}{sequence_opts}"
+        else:
+            return f"GENERATED{this}AS {expr}{sequence_opts} {stored}"
 
     def notnullcolumnconstraint_sql(self, expression: exp.NotNullColumnConstraint) -> str:
         return f"{'' if expression.args.get('allow_null') else 'NOT '}NULL"
