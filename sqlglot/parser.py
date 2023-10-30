@@ -140,6 +140,9 @@ class Parser(metaclass=_Parser):
         TokenType.MEDIUMTEXT,
         TokenType.LONGTEXT,
         TokenType.TINYBLOB,
+        TokenType.POINT,
+        TokenType.INT_UNSIGNED,
+        TokenType.SMALLINT_UNSIGNED,
         TokenType.MEDIUMBLOB,
         TokenType.LONGBLOB,
         TokenType.BINARY,
@@ -673,7 +676,6 @@ class Parser(metaclass=_Parser):
         ),
         "ENCODE": lambda self: self.expression(exp.EncodeColumnConstraint, this=self._parse_var()),
         "FOREIGN KEY": lambda self: self._parse_foreign_key(),
-        # "FOREIGN KEY": lambda self: self._parse_foreign_key_index(),
         "FORMAT": lambda self: self.expression(
             exp.DateFormatColumnConstraint, this=self._parse_var_or_string()
         ),
@@ -704,7 +706,7 @@ class Parser(metaclass=_Parser):
         "RENAME": lambda self: self._parse_alter_table_rename(),
     }
 
-    SCHEMA_UNNAMED_CONSTRAINTS = {"CHECK", "FOREIGN KEY", "LIKE", "PRIMARY KEY", "UNIQUE", "KEY"}
+    SCHEMA_UNNAMED_CONSTRAINTS = {"CHECK", "FOREIGN KEY", "LIKE", "PRIMARY KEY", "UNIQUE", "KEY", "SPATIAL KEY", "FULLTEXT KEY"}
 
     NO_PAREN_FUNCTION_PARSERS = {
         TokenType.ANY: lambda self: self.expression(exp.Any, this=self._parse_bitwise()),
@@ -1598,8 +1600,7 @@ class Parser(metaclass=_Parser):
             type="RANGE"
             if self._match_texts("COLUMNS"):
                 type="RANGE COLUMNS"
-                unsuported =  exp.UnsupportedNuodb(this=True, message="Range column partition is not supported", expression=self.expression)
-                self.raise_error(unsuported)
+                self.raise_error("Range column partition is not supported")
 
             if self._match(TokenType.L_PAREN):
                 expr = self._parse_schema() or self._parse_bracket(self._parse_field())

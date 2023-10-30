@@ -330,6 +330,11 @@ class TokenType(AutoName):
     STRUCT = auto()
     TABLE_SAMPLE = auto()
     TEMPORARY = auto()
+    POINT=auto()
+    INT_UNSIGNED=auto()
+    SMALLINT_UNSIGNED=auto()
+    SPATIAL_KEY= auto()
+    FULLTEXT_KEY=auto()
     THROW = auto()
     TO = auto()
     TOP = auto()
@@ -647,6 +652,8 @@ class Tokenizer(metaclass=_Tokenizer):
         "PIVOT": TokenType.PIVOT,
         "PRAGMA": TokenType.PRAGMA,
         "PRIMARY KEY": TokenType.PRIMARY_KEY,
+        "SPATIAL KEY": TokenType.SPATIAL_KEY,
+        "FULLTEXT KEY": TokenType.FULLTEXT_KEY,
         "PROCEDURE": TokenType.PROCEDURE,
         "QUALIFY": TokenType.QUALIFY,
         "RANGE": TokenType.RANGE,

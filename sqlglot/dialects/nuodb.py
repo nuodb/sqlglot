@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlglot import exp, generator, parser, tokens, transforms
 from sqlglot.dialects.dialect import (Dialect,no_comment_column_constraint_sql)
 from sqlglot.tokens import Tokenizer, TokenType, Token
+from sqlglot.errors import UnsupportedError
 
 
 global schema_name
@@ -10,7 +11,41 @@ schema_name = None
 
 
 
-def no_properties_sql(self: generator.Generator, expression: exp.Properties) -> str:
+def _parse_fulltext_key(self: generator.Generator, expression: exp.Expression) -> exp.Expression:
+    self.unsupported("FULLTEXT KEY is not supported in NuoDB")
+
+def _parse_spatial_key(self: generator.Generator, expression: exp.Expression) -> exp.Expression:
+    #NuoDB doesn't support Spatial key, so just returning it as Null
+    raise UnsupportedError("SPATIAL KEY is not supported in NuoDB")
+
+#prefix index
+def _parse_key_constraint(self: generator.Generator, expression: exp.Expression, k:exp.Expression) -> str:
+    fun_exp = k.find_all(exp.Func)
+    datatype = "INT"
+    for f in fun_exp:
+        col_name_for_ind = f.args["this"]
+        numeric = f.args["expressions"][0]
+        new_column_name = f"prefix_index_{col_name_for_ind}"
+        if k.args["colname"].this == f:
+            print("okay ound columns")
+            col_exp = expression.find_all(exp.ColumnDef)
+            for column in col_exp:
+                col = column.args["this"]
+                if isinstance(col, exp.Identifier):
+                    col = col.this
+                if col == col_name_for_ind:
+                    datatype = column.args["kind"]
+        k.pop()
+        new_col=exp.ColumnDef(this=new_column_name,quoted=True,  kind=datatype)
+        expr = f"LEFT({col_name_for_ind}, {numeric})"
+        new_col.append("constraints", exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=True, expression=expr, stored="PERSISTED")))
+        schema = expression.this
+        schema.append("expressions", new_col)
+        k.args["colname"] = f"({new_column_name})"
+        schema.append("expressions", k)
+
+
+def no_properties_sql(self: generator.Generator, expression: exp.Properties)->str:
     if isinstance(expression, exp.PartitionedByProperty):
         return ""
     self.unsupported("Properties unsupported")
@@ -90,9 +125,11 @@ def _auto_increment_to_generated_by_default(expression: exp.Expression) -> exp.E
     auto = expression.find(exp.AutoIncrementColumnConstraint)
     if auto:
         expression = expression.copy()
+        constraints = expression.args["constraints"]
         expression.args["constraints"].remove(auto.parent)
-        if auto is not None:
-            expression.append("constraints", exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=False)))
+        generated = exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=False, stored=False))
+        if generated not in constraints:
+            constraints.insert(0, generated)
 
     return expression
 
@@ -202,6 +239,12 @@ def replace_db_to_schema(self: generator,expression: exp.Expression) ->exp.Expre
                 if self.sql(expression, "this"):
                     self.unsupported("Hints are not supported")
                     return ""
+
+    if(isinstance(expression, exp.Create)):
+        key_const_exp=expression.find_all(exp.KeyColumnConstraintForIndex)
+        if key_const_exp:
+            for k in key_const_exp:
+                _parse_key_constraint(self, expression, k)
 
     return self.create_sql(expression)
 
@@ -331,10 +374,12 @@ class NuoDB(Dialect):
                     exp.Create: replace_db_to_schema,
                     exp.ColumnConstraint : transforms.preprocess([_remove_collate]),
                     exp.Properties: no_properties_sql,
-                    # exp.UniqueColumnConstraint: _parse_unique,
                     exp.CommentColumnConstraint: no_comment_column_constraint_sql,
                     exp.AddConstraint: _parse_foreign_key_index,
                     exp.Constraint: _parse_foreign_key_index,
+                    exp.SpatialKey: _parse_spatial_key,
+                    exp.UniqueColumnConstraint: _parse_unique,
+                    exp.FullTextKey: _parse_fulltext_key,
                     }
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
@@ -343,7 +388,11 @@ class NuoDB(Dialect):
             exp.DataType.Type.TINYTEXT: "VARCHAR(255)",
             exp.DataType.Type.INT: "INTEGER",
             exp.DataType.Type.JSON: "TEXT",
-            exp.DataType.Type.VARBINARY : "BLOB"
+            exp.DataType.Type.VARBINARY : "BLOB",
+            exp.DataType.Type.POINT: "TEXT",
+            exp.DataType.Type.INT_UNSIGNED: "BIGINT",
+            exp.DataType.Type.SMALLINT_UNSIGNED: "SMALLINT",
+            exp.DataType.Type.SMALLINT: "SMALLINT",
 
             # ? Revise below and add
             # exp.DataType.Type.TINYINT: "INT64",

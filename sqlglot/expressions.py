@@ -1323,6 +1323,11 @@ class KeyColumnConstraintForIndex(ColumnConstraintKind):
                  "colname":False,
                  "options": False}
 
+class SpatialKey(ColumnConstraintKind):
+    arg_types = {"this": False, "spatialkeyname": False, "spatialcolname": False}
+
+class FullTextKey(ColumnConstraintKind):
+    arg_types = {"this": False, "colname": False, "keyname": False}
 
 class Constraint(Expression):
     arg_types = {"this": True, "expressions": True}
@@ -3342,6 +3347,9 @@ class DataType(Expression):
         DATETIME64 = auto()
         ENUM = auto()
         MEDIUMINT = auto()
+        POINT=auto()
+        INT_UNSIGNED=auto()
+        SMALLINT_UNSIGNED=auto()
         INT4RANGE = auto()
         INT4MULTIRANGE = auto()
         INT8RANGE = auto()
