@@ -1,25 +1,33 @@
 from __future__ import annotations
 
 from sqlglot import exp, generator, parser, tokens, transforms
-from sqlglot.dialects.dialect import (Dialect,no_comment_column_constraint_sql)
-from sqlglot.tokens import Tokenizer, TokenType, Token
+from sqlglot.dialects.dialect import Dialect, no_comment_column_constraint_sql
 from sqlglot.errors import UnsupportedError
-
+from sqlglot.tokens import Tokenizer, TokenType
 
 global schema_name
 schema_name = None
 
 
+def _parse_introducer(self: generator.Generator, expression: exp.Expression) -> exp.Expression:
+    expression.args["this"] = None
 
-def _parse_fulltext_key(self: generator.Generator, expression: exp.Expression) -> exp.Expression:
+    return expression
+
+
+def _parse_fulltext_key(self: generator.Generator, expression: exp.Expression) -> None:
     self.unsupported("FULLTEXT KEY is not supported in NuoDB")
 
-def _parse_spatial_key(self: generator.Generator, expression: exp.Expression) -> exp.Expression:
-    #NuoDB doesn't support Spatial key, so just returning it as Null
+
+def _parse_spatial_key(self: generator.Generator, expression: exp.Expression) -> None:
+    # NuoDB doesn't support Spatial key, so just returning it as Null
     raise UnsupportedError("SPATIAL KEY is not supported in NuoDB")
 
-#prefix index
-def _parse_key_constraint(self: generator.Generator, expression: exp.Expression, k:exp.Expression) -> str:
+
+# prefix index
+def _parse_key_constraint(
+    self: generator.Generator, expression: exp.Expression, k: exp.Expression
+) -> None:
     fun_exp = k.find_all(exp.Func)
     datatype = "INT"
     for f in fun_exp:
@@ -27,7 +35,6 @@ def _parse_key_constraint(self: generator.Generator, expression: exp.Expression,
         numeric = f.args["expressions"][0]
         new_column_name = f"prefix_index_{col_name_for_ind}"
         if k.args["colname"].this == f:
-            print("okay ound columns")
             col_exp = expression.find_all(exp.ColumnDef)
             for column in col_exp:
                 col = column.args["this"]
@@ -36,83 +43,96 @@ def _parse_key_constraint(self: generator.Generator, expression: exp.Expression,
                 if col == col_name_for_ind:
                     datatype = column.args["kind"]
         k.pop()
-        new_col=exp.ColumnDef(this=new_column_name,quoted=True,  kind=datatype)
+        new_col = exp.ColumnDef(this=new_column_name, quoted=True, kind=datatype)
         expr = f"LEFT({col_name_for_ind}, {numeric})"
-        new_col.append("constraints", exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=True, expression=expr, stored="PERSISTED")))
+        new_col.append(
+            "constraints",
+            exp.ColumnConstraint(
+                kind=exp.GeneratedAsIdentityColumnConstraint(
+                    this=True, expression=expr, stored=exp.Identifier(this="PERSISTED")
+                )
+            ),
+        )
         schema = expression.this
         schema.append("expressions", new_col)
         k.args["colname"] = f"({new_column_name})"
         schema.append("expressions", k)
 
 
-def no_properties_sql(self: generator.Generator, expression: exp.Properties)->str:
+def no_properties_sql(self: generator.Generator, expression: exp.Properties) -> str:
     if isinstance(expression, exp.PartitionedByProperty):
         return ""
     self.unsupported("Properties unsupported")
     return ""
 
-def _parse_foreign_key_index(self: generator.Generator, expression: exp.Expression) -> str:
-    if isinstance(expression.parent.parent, exp.Create):
-        global schema_name
-        index_foreign_key_sql= ""
-        alter_table= ""
-        key_name = ""
-        foreign_key_expression = expression.find_all(exp.ForeignKey)
-        Key_constraint_index = expression.parent.parent.find_all(exp.KeyColumnConstraintForIndex)
-        key_col_map = {}
 
-        ref_key_index = expression.find_all(exp.Reference)
-        if ref_key_index:
-            for r in ref_key_index:
-                options_list = r.args.get("options", [])
-                if options_list and len(options_list) > 0:
-                    first_option = options_list[0]
-                    r.args["options"] = [first_option]
+def _parse_foreign_key_index(
+    self: generator.Generator, expression: exp.Expression
+) -> exp.Expression | None:
+    if expression.parent:
+        if isinstance(expression.parent.parent, exp.Create):
+            global schema_name
+            index_foreign_key_sql = ""
+            alter_table = ""
+            key_name = ""
+            foreign_key_expression = expression.find_all(exp.ForeignKey)
 
-        for k in Key_constraint_index:
-            idx_name = str(k.args.get("keyname"))
-            key_name = k.args["colname"]
-            key_name = key_name.this
-            key_col_map[str(idx_name)] = str(key_name)
-        if foreign_key_expression:
-            for fk in foreign_key_expression:
-                tbl_name = expression.parent.args["this"]
-                column_name = fk.args["expressions"][0]
-                index_name = f"{tbl_name}_{column_name}"
-                index_name = index_name.replace('\"', '')
-                constraint_name = expression.args["this"]
-                if len(key_col_map) !=0:
-                    for idx_name, key_name in key_col_map.items():
-                        if str(column_name) == str(key_name) or str(idx_name) == str(constraint_name):
-                            index_foreign_key_sql = ""
-                            alter_table = ""
-                            break
-                        else:
-                            index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
+            Key_constraint_index = expression.parent.parent.find_all(
+                exp.KeyColumnConstraintForIndex
+            )
+            key_col_map = {}
 
-                            if schema_name:
-                                alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD {expression}"
+            ref_key_index = expression.find_all(exp.Reference)
+            if ref_key_index:
+                for r in ref_key_index:
+                    options_list = r.args.get("options", [])
+                    if options_list and len(options_list) > 0:
+                        first_option = options_list[0]
+                        r.args["options"] = [first_option]
+
+            for k in Key_constraint_index:
+                idx_name = str(k.args.get("keyname"))
+                key_name = k.args["colname"]
+                key_name = key_name.this  # type: ignore
+                key_col_map[str(idx_name)] = str(key_name)
+            if foreign_key_expression:
+                for fk in foreign_key_expression:
+                    tbl_name = expression.parent.args["this"]
+                    column_name = fk.args["expressions"][0]
+                    index_name = f"{tbl_name}_{column_name}"
+                    index_name = index_name.replace('"', "")
+                    constraint_name = expression.args["this"]
+                    if len(key_col_map) != 0:
+                        for idx_name, key_name in key_col_map.items():
+                            if str(column_name) == str(key_name) or str(idx_name) == str(
+                                constraint_name
+                            ):
+                                index_foreign_key_sql = ""
+                                break
                             else:
-                                alter_table = f"ALTER TABLE {tbl_name} ADD {expression}"
-                else:
-                    index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
+                                index_foreign_key_sql = (
+                                    f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
+                                )
+                    else:
+                        index_foreign_key_sql = (
+                            f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
+                        )
                     if schema_name:
-                                alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD {expression}"
+                        alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD {expression}"
                     else:
                         alter_table = f"ALTER TABLE {tbl_name} ADD {expression}"
-
-                expression.parent.parent.add_foreign_key_index(index_foreign_key_sql)
-                expression.parent.parent.add_foreign_key_constraint(alter_table)
+                    expression.parent.parent.add_foreign_key_index(index_foreign_key_sql)
+                    expression.parent.parent.add_foreign_key_constraint(alter_table)
 
     if isinstance(expression.parent, exp.AlterTable):
         foreign_key_expression = expression.find_all(exp.ForeignKey)
-        index_foreign_key_sql= ""
+        index_foreign_key_sql = ""
         if foreign_key_expression:
             for fk in foreign_key_expression:
                 tbl_name = expression.parent.args["this"]
                 column_name = fk.args["expressions"][0]
                 index_name = f"{tbl_name}_{column_name}"
-                index_name = index_name.replace('\"', '')
+                index_name = index_name.replace('"', "")
                 index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
                 expression.parent.set("foreign_key_index", index_foreign_key_sql)
     if generator.exclude_fk_constraint:
@@ -120,14 +140,16 @@ def _parse_foreign_key_index(self: generator.Generator, expression: exp.Expressi
 
     return expression
 
-def _auto_increment_to_generated_by_default(expression: exp.Expression) -> exp.Expression:
 
+def _auto_increment_to_generated_by_default(expression: exp.Expression) -> exp.Expression:
     auto = expression.find(exp.AutoIncrementColumnConstraint)
     if auto:
         expression = expression.copy()
         constraints = expression.args["constraints"]
         expression.args["constraints"].remove(auto.parent)
-        generated = exp.ColumnConstraint(kind=exp.GeneratedAsIdentityColumnConstraint(this=False, stored=False))
+        generated = exp.ColumnConstraint(
+            kind=exp.GeneratedAsIdentityColumnConstraint(this=False, stored=False)
+        )
         if generated not in constraints:
             constraints.insert(0, generated)
 
@@ -140,13 +162,20 @@ def _parse_partition_hash(self: generator.Generator, expression: exp.Expression)
     for p in partition_exp:
         col_name = p.args["this"]
         partition_col_name = f"p_{col_name}"
-        partition_col = exp.ColumnDef(this=partition_col_name, kind= "INT")
-        partition_col.append("constraints", exp.ColumnConstraint(kind = exp.GeneratedAsIdentityColumnConstraint(this=True, expression=f"{col_name}%4", stored="PERSISTED")))
+        partition_col = exp.ColumnDef(this=partition_col_name, kind="INT")
+        partition_col.append(
+            "constraints",
+            exp.ColumnConstraint(
+                kind=exp.GeneratedAsIdentityColumnConstraint(
+                    this=True, expression=f"{col_name}%4", stored=exp.Identifier(this="PERSISTED")
+                )
+            ),
+        )
         schema.append("expressions", partition_col)
         p.args["this"] = f"({partition_col_name})"
         count_partitions = p.args["count_partitions"]
         sub_part_list = []
-        for i in range(0,int(count_partitions)):
+        for i in range(0, int(count_partitions)):
             part_name = f"p{i}"
             sub_exp = f"PARTITION {part_name} VALUES IN ({i}) STORE IN UNPARTITIONED"
             sub_part_list.append(sub_exp)
@@ -156,7 +185,6 @@ def _parse_partition_hash(self: generator.Generator, expression: exp.Expression)
 
 
 def _parse_partition_key(self: generator.Generator, expression: exp.Expression):
-    schema = expression.this
     primaryKey_exp = expression.find_all(exp.PrimaryKey)
     uniqueKey_exp = expression.find_all(exp.UniqueColumnConstraint)
 
@@ -178,7 +206,7 @@ def _parse_partition_key(self: generator.Generator, expression: exp.Expression):
         if part_col:
             partition_key_column_name = part_col
         sub_part_list = []
-        for i in range(0,int(count_partitions)):
+        for i in range(0, int(count_partitions)):
             part_name = f"p{i}"
             sub_exp = f"PARTITION {part_name} VALUES IN ({i}) STORE IN UNPARTITIONED"
             sub_part_list.append(sub_exp)
@@ -186,9 +214,9 @@ def _parse_partition_key(self: generator.Generator, expression: exp.Expression):
         p.args["subpartition"] = True
         p.args["subpart_exp"] = sub_part_list
         if part_col:
-            p.args["main_partition"] =  f"{partition_key_column_name}"
+            p.args["main_partition"] = f"{partition_key_column_name}"
         else:
-            p.args["main_partition"] =  f"{partition_key_column_name}"
+            p.args["main_partition"] = f"{partition_key_column_name}"
 
 
 def _parse_partition_range(self: generator.Generator, expression: exp.Expression):
@@ -204,27 +232,30 @@ def _parse_partition_range(self: generator.Generator, expression: exp.Expression
                 if fun in processed_functions:
                     continue
                 partition_column = exp.ColumnDef(this=partition_col_name, kind="INT")
-                partition_column.append("constraints", exp.ColumnConstraint(kind = exp.GeneratedAsIdentityColumnConstraint(this=True, expression=fun, stored="PERSISTED")))
+                partition_column.append(
+                    "constraints",
+                    exp.ColumnConstraint(
+                        kind=exp.GeneratedAsIdentityColumnConstraint(
+                            this=True, expression=fun, stored=exp.Identifier(this="PERSISTED")
+                        )
+                    ),
+                )
                 schema.append("expressions", partition_column)
                 p.args["this"] = f"({partition_col_name})"
                 p.args["main_partition"] = partition_col_name
                 processed_functions.add(fun)
 
-def replace_db_to_schema(self: generator,expression: exp.Expression) ->exp.Expression:
-    if (
-        isinstance(expression, (exp.Create))
-        and expression.args["kind"] == "DATABASE"
-    ):
-        expression = expression.copy()
+
+def replace_db_to_schema(self: generator.Generator, expression: exp.Create) -> str:
+    if isinstance(expression, (exp.Create)) and expression.args["kind"] == "DATABASE":
         expression.args["kind"] = "SCHEMA"
         global schema_name
         schema_name = expression.args["this"]
 
-
-    has_schema = isinstance(expression.this, exp.Schema)
+    isinstance(expression.this, exp.Schema)
     is_partitionable = expression.args.get("kind") in ("TABLE", "VIEW")
 
-    if(isinstance(expression, exp.Create)) and is_partitionable:
+    if (isinstance(expression, exp.Create)) and is_partitionable:
         partition_exp = expression.find_all(exp.PartitionedByProperty)
         for p in partition_exp:
             if p.args["type"] == "RANGE":
@@ -235,13 +266,13 @@ def replace_db_to_schema(self: generator,expression: exp.Expression) ->exp.Expre
                 _parse_partition_hash(self, expression)
             if p.args["type"] == "KEY":
                 _parse_partition_key(self, expression)
-            if p.args["type"]  == "RANGE COLUMNS":
+            if p.args["type"] == "RANGE COLUMNS":
                 if self.sql(expression, "this"):
-                    self.unsupported("Hints are not supported")
+                    self.unsupported("RANGE COLUMNS are not supported")
                     return ""
 
-    if(isinstance(expression, exp.Create)):
-        key_const_exp=expression.find_all(exp.KeyColumnConstraintForIndex)
+    if isinstance(expression, exp.Create):
+        key_const_exp = expression.find_all(exp.KeyColumnConstraintForIndex)
         if key_const_exp:
             for k in key_const_exp:
                 _parse_key_constraint(self, expression, k)
@@ -249,27 +280,44 @@ def replace_db_to_schema(self: generator,expression: exp.Expression) ->exp.Expre
     return self.create_sql(expression)
 
 
-
-def _parse_unique(self: generator.Generator, expression : exp.Expression) ->str:
+def _parse_unique(self: generator.Generator, expression: exp.Expression) -> str:
     unique = expression.find_all(exp.UniqueColumnConstraint)
     if unique:
         this = expression.args["this"]
-        return f"UNIQUE KEY {this}"
-    else:
-        return expression
+    return f"UNIQUE KEY {this}"
 
 
 def _remove_collate(expression: exp.Expression) -> exp.Expression:
-
     column_constraint = expression.find(exp.ColumnConstraint)
     if column_constraint:
         expression = expression.copy()
         collateProp = column_constraint.find(exp.CollateColumnConstraint)
         charsetProp = column_constraint.find(exp.CharacterSetColumnConstraint)
-        if collateProp or charsetProp:
+        onUpdateColumnConstraint = column_constraint.find(exp.OnUpdateColumnConstraint)
+        defaultColumnConstraint = column_constraint.find(exp.DefaultColumnConstraint)
+
+        if onUpdateColumnConstraint:
             expression.args["kind"].replace(None)
 
+        if collateProp or charsetProp:
+            expression.args["kind"].replace(None)
+        if defaultColumnConstraint:
+            currentTime = defaultColumnConstraint.find(exp.CurrentTimestamp)
+            if currentTime:
+                expression.set(
+                    "kind", exp.DefaultColumnConstraint(this=exp.CurrentTimestamp(this=None))
+                )
+
+    # logic to change storage in computed column
+    compColumn = expression.find_all(exp.GeneratedAsIdentityColumnConstraint)
+    if compColumn:
+        for col in compColumn:
+            if col.args["this"]:
+                if col.args["stored"].name == "VIRTUAL" or col.args["stored"].name == "STORED":
+                    col.args["stored"] = exp.Identifier(this="PERSISTED")
+
     return expression
+
 
 class NuoDB(Dialect):
     # * Refer to http://nuocrucible/browse/NuoDB/Omega/Parser/SQL.l?r=5926eff6ff3e077c09c390c7acc4649c81b1d27b&r=daafc63d9399e66689d0990a893fbddd115df89f&r=6ef1d2d9e253f74515bf89625434b605be6486ea
@@ -282,7 +330,7 @@ class NuoDB(Dialect):
             "N'",  # unicodequote
             # ?
         ]
-        COMMENTS = ["--", "//", ("/*", "*/"), ("/* !", "*/;")]
+        COMMENTS = ["--", "//", ("/*", "*/"), ("/* !", "*/;"), ("/* !50100", "*/;")]
         IDENTIFIERS = ["`", '"']  # ?
         STRING_ESCAPES = ["\\"]
 
@@ -344,7 +392,6 @@ class NuoDB(Dialect):
             "_UTF32": TokenType.INTRODUCER,
             "_UTF8MB3": TokenType.INTRODUCER,
             "_UTF8MB4": TokenType.INTRODUCER,
-
         }
 
     class Parser(parser.Parser):
@@ -369,31 +416,34 @@ class NuoDB(Dialect):
             )
 
     class Generator(generator.Generator):
-        TRANSFORMS = {**generator.Generator.TRANSFORMS,
-                    exp.ColumnDef: transforms.preprocess([_auto_increment_to_generated_by_default]),
-                    exp.Create: replace_db_to_schema,
-                    exp.ColumnConstraint : transforms.preprocess([_remove_collate]),
-                    exp.Properties: no_properties_sql,
-                    exp.CommentColumnConstraint: no_comment_column_constraint_sql,
-                    exp.AddConstraint: _parse_foreign_key_index,
-                    exp.Constraint: _parse_foreign_key_index,
-                    exp.SpatialKey: _parse_spatial_key,
-                    exp.UniqueColumnConstraint: _parse_unique,
-                    exp.FullTextKey: _parse_fulltext_key,
-                    }
+        TRANSFORMS = {
+            **generator.Generator.TRANSFORMS,
+            exp.ColumnDef: transforms.preprocess([_auto_increment_to_generated_by_default]),
+            exp.Create: replace_db_to_schema,
+            exp.ColumnConstraint: transforms.preprocess([_remove_collate]),
+            exp.Properties: no_properties_sql,
+            exp.CommentColumnConstraint: no_comment_column_constraint_sql,
+            exp.AddConstraint: _parse_foreign_key_index,
+            exp.Constraint: _parse_foreign_key_index,
+            exp.SpatialKey: _parse_spatial_key,
+            exp.UniqueColumnConstraint: _parse_unique,
+            exp.FullTextKey: _parse_fulltext_key,
+            exp.Introducer: _parse_introducer,
+        }
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
-            exp.DataType.Type.MEDIUMINT: "NUMBER",  # ? Confirm NUMBER is most appropriate, and not
+            exp.DataType.Type.MEDIUMINT: "INTEGER",  # ? Confirm NUMBER is most appropriate, and not
             exp.DataType.Type.TINYBLOB: "BLOB",  # ? Confirm NUMBER is most appropriate, and not
             exp.DataType.Type.TINYTEXT: "VARCHAR(255)",
             exp.DataType.Type.INT: "INTEGER",
             exp.DataType.Type.JSON: "TEXT",
-            exp.DataType.Type.VARBINARY : "BLOB",
+            exp.DataType.Type.VARBINARY: "BLOB",
             exp.DataType.Type.POINT: "TEXT",
             exp.DataType.Type.INT_UNSIGNED: "BIGINT",
             exp.DataType.Type.SMALLINT_UNSIGNED: "SMALLINT",
+            exp.DataType.Type.BIGINT_UNSIGNED: "BIGINT",
+            exp.DataType.Type.TINYINT_UNSIGNED: "INTEGER",
             exp.DataType.Type.SMALLINT: "SMALLINT",
-
             # ? Revise below and add
             # exp.DataType.Type.TINYINT: "INT64",
             # exp.DataType.Type.SMALLINT: "INT64",
@@ -406,7 +456,6 @@ class NuoDB(Dialect):
             # exp.DataType.Type.TEXT: "STRING",
         }
 
-
         PROPERTIES_LOCATION = {
             **generator.Generator.PROPERTIES_LOCATION,
             exp.EngineProperty: exp.Properties.Location.UNSUPPORTED,
@@ -415,7 +464,6 @@ class NuoDB(Dialect):
             exp.VolatileProperty: exp.Properties.Location.UNSUPPORTED,
             exp.PartitionedByProperty: exp.Properties.Location.POST_EXPRESSION,
         }
-
 
         def partitionedbyproperty_sql(self, expression: exp.PartitionedByProperty) -> str:
             type = expression.args["type"]
@@ -430,35 +478,34 @@ class NuoDB(Dialect):
 
         def exclusivelock_sql(self, expression: exp.ExclusiveLock) -> str:
             kind = self.sql(expression, "kind")
-            kind = f" TABLE" if kind == "TABLES" else ""
+            kind = "TABLE" if kind == "TABLES" else ""
             tbl_name = self.sql(expression, "tbl_name")
-            tbl_name = f" {tbl_name}" if tbl_name else ""
+            tbl_name = f"{tbl_name}" if tbl_name else ""
             lock_type = self.sql(expression, "lock_type")
-            lock_type = f" EXCLUSIVE" if lock_type in ["WRITE", "READ"] else ""
-            return f"LOCK{kind}{tbl_name}{lock_type}"
+            lock_type = " EXCLUSIVE" if lock_type in ["WRITE", "READ"] else ""
+            return f"LOCK {kind} {tbl_name}{lock_type}"
 
-        def keycolumnconstraintforindex_sql(self, expression: exp.KeyColumnConstraintForIndex) -> str:
-            exp = expression.args.get("expression")
-            desc = expression.args.get("desc")
+        def keycolumnconstraintforindex_sql(
+            self, expression: exp.KeyColumnConstraintForIndex
+        ) -> str:
+            expression.args.get("expression")
+            expression.args.get("desc")
             key_name = expression.args.get("keyname")
             col_name = expression.args.get("colname")
-            opts= expression.args.get("options")
-            if opts is False:
-                return f"KEY {key_name} {col_name}"
-            else:
+            opts = expression.args.get("options")
+            if opts is False and not None:
                 return f"KEY {key_name} {col_name} {opts}"
-
+            else:
+                return f"KEY {key_name} {col_name}"
 
         def datatype_sql(self, expression: exp.DataType) -> str:
             if expression.is_type("bit"):
                 expression = expression.copy()
                 expression.set("this", exp.DataType.Type.BOOLEAN)
-                precision = expression.args.get("expressions")
                 expression.args["expressions"] = None
             if expression.is_type("tinyint"):
                 expression = expression.copy()
                 expression.set("this", exp.DataType.Type.INT)
-                precision = expression.args.get("expressions")
                 expression.args["expressions"] = None
 
             return super().datatype_sql(expression)

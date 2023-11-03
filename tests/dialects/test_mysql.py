@@ -47,12 +47,10 @@ class TestMySQL(Validator):
         )
         self.validate_all(
             "CREATE TABLE `datatypes1` (`c6` mediumint(9) NOT NULL DEFAULT '0')",
-            read="mysql",
             write={"nuodb": "CREATE TABLE `datatypes1` (`c6` INTEGER(9) NOT NULL DEFAULT '0')"},
         )
         self.validate_all(
             "CREATE TABLE `datatypes1` (`c14` tinyblob)",
-            read="mysql",
             write={"nuodb": "CREATE TABLE `datatypes1` (`c14` BLOB)"},
         )
 
@@ -150,13 +148,13 @@ class TestMySQL(Validator):
             },
         )
         self.validate_all(
-            "CREATE TABLE `datatypes3` (`c1` tinytext)",
-            read={"mysql": "CREATE TABLE `datatypes3` (`c1` tinytext)"},
+            "CREATE TABLE `datatypes3` (`c1` TINYTEXT)",
+            read={"mysql": "CREATE TABLE `datatypes3` (`c1` TINYTEXT)"},
             write={"nuodb": "CREATE TABLE `datatypes3` (`c1` VARCHAR(255))"},
         )
         self.validate_all(
-            "CREATE TABLE `datatypes1` (`c14` tinyblob)",
-            read={"mysql": "CREATE TABLE `datatypes1` (`c14` tinyblob)"},
+            "CREATE TABLE `datatypes1` (`c14` TINYBLOB)",
+            read={"mysql": "CREATE TABLE `datatypes1` (`c14` TINYBLOB)"},
             write={"nuodb": "CREATE TABLE `datatypes1` (`c14` BLOB)"},
         )
 
@@ -757,6 +755,5 @@ COMMENT='客户账户表'"""
     def test_lock_tables(self):
         self.validate_all(
             "LOCK TABLES `datatypes1` WRITE",
-            read="mysql",
             write={"nuodb": "LOCK TABLE `datatypes1` EXCLUSIVE"},
         )

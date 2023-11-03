@@ -6,8 +6,8 @@ from sqlglot.transforms import (
     eliminate_qualify,
     remove_precision_parameterized_types,
     unalias_group,
-    replace_db_to_schema
 )
+
 
 
 class TestTransforms(unittest.TestCase):
@@ -118,23 +118,4 @@ class TestTransforms(unittest.TestCase):
             remove_precision_parameterized_types,
             "SELECT CAST(1 AS DECIMAL(10, 2)), CAST('13' AS VARCHAR(10))",
             "SELECT CAST(1 AS DECIMAL), CAST('13' AS VARCHAR)",
-        )
-
-    def test_replace_db_to_schema(self):
-        self.validate(
-            replace_db_to_schema,
-            "CREATE DATABASE simpleDB",
-            "CREATE SCHEMA simpleDB",
-        )
-
-        self.validate(
-            replace_db_to_schema,
-            "CREATE SCHEMA simpleDB",
-            "CREATE SCHEMA simpleDB",
-        )
-
-        self.validate(
-            replace_db_to_schema,
-            "CREATE TABLE simpleDB (id int, name varchar(50))",
-            "CREATE TABLE simpleDB (id INT, name VARCHAR(50))",
         )

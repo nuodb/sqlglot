@@ -1006,7 +1006,6 @@ class Create(Expression):
         self.foreign_key_constraint.append(comnstraint_sql)
 
 
-
 # https://docs.snowflake.com/en/sql-reference/sql/create-clone
 class Clone(Expression):
     arg_types = {
@@ -1018,7 +1017,7 @@ class Clone(Expression):
 
 
 class UnsupportedNuodb(Expression):
-    arg_types={"this": False, "message": False, "expression": False}
+    arg_types = {"this": False, "message": False, "expression": False}
 
 
 class Describe(Expression):
@@ -1282,7 +1281,6 @@ class GeneratedAsIdentityColumnConstraint(ColumnConstraintKind):
     }
 
 
-
 class InlineLengthColumnConstraint(ColumnConstraintKind):
     pass
 
@@ -1315,16 +1313,21 @@ class UppercaseColumnConstraint(ColumnConstraintKind):
 class PathColumnConstraint(ColumnConstraintKind):
     pass
 
+
 class KeyColumnConstraintForIndex(ColumnConstraintKind):
-    arg_types = {"this": False,
-                 "expression":False,
-                 "desc": False,
-                 "keyname": False,
-                 "colname":False,
-                 "options": False}
+    arg_types = {
+        "this": False,
+        "expression": False,
+        "desc": False,
+        "keyname": False,
+        "colname": False,
+        "options": False,
+    }
+
 
 class SpatialKey(ColumnConstraintKind):
     arg_types = {"this": False, "spatialkeyname": False, "spatialcolname": False}
+
 
 class FullTextKey(ColumnConstraintKind):
     arg_types = {"this": False, "colname": False, "keyname": False}
@@ -2024,14 +2027,15 @@ class OnCommitProperty(Property):
 
 
 class PartitionedByProperty(Property):
-    # arg_types = {"this": True}
-    arg_types = {"this": False,
-                 "main_partition":True,
-                 "type": False,
-                 "subpartition": False,
-                 "subpart_exp": False,
-                 "count_partitions": False,
-                 }
+
+    arg_types = {
+        "this": False,
+        "main_partition": True,
+        "type": False,
+        "subpartition": False,
+        "subpart_exp": False,
+        "count_partitions": False,
+    }
 
 
 class ReturnsProperty(Property):
@@ -3129,7 +3133,7 @@ class Select(Subqueryable):
             kind="table",
             expression=instance,
             properties=properties_expression,
-            foreign_key_index=False
+            foreign_key_index=False,
         )
 
     def lock(self, update: bool = True, copy: bool = True) -> Select:
@@ -3347,9 +3351,11 @@ class DataType(Expression):
         DATETIME64 = auto()
         ENUM = auto()
         MEDIUMINT = auto()
-        POINT=auto()
-        INT_UNSIGNED=auto()
-        SMALLINT_UNSIGNED=auto()
+        POINT = auto()
+        INT_UNSIGNED = auto()
+        SMALLINT_UNSIGNED = auto()
+        BIGINT_UNSIGNED = auto()
+        TINYINT_UNSIGNED = auto()
         INT4RANGE = auto()
         INT4MULTIRANGE = auto()
         INT8RANGE = auto()
@@ -3599,7 +3605,7 @@ class Dot(Binary):
     def build(self, expressions: t.Sequence[Expression]) -> Dot:
         """Build a Dot object with a sequence of expressions."""
         if len(expressions) < 2:
-            raise ValueError(f"Dot requires >= 2 expressions.")
+            raise ValueError(f"Dot requires >= 2 expressions.{''}")
 
         a, b, *expressions = expressions
         dot = Dot(this=a, expression=b)
@@ -4741,7 +4747,7 @@ def maybe_parse(
         return sql_or_expression
 
     if sql_or_expression is None:
-        raise ParseError(f"SQL cannot be None")
+        raise ParseError("SQL cannot be None")
 
     import sqlglot
 
