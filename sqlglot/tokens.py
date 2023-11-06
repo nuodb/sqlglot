@@ -330,11 +330,13 @@ class TokenType(AutoName):
     STRUCT = auto()
     TABLE_SAMPLE = auto()
     TEMPORARY = auto()
-    POINT=auto()
-    INT_UNSIGNED=auto()
-    SMALLINT_UNSIGNED=auto()
-    SPATIAL_KEY= auto()
-    FULLTEXT_KEY=auto()
+    POINT = auto()
+    INT_UNSIGNED = auto()
+    SMALLINT_UNSIGNED = auto()
+    BIGINT_UNSIGNED = auto()
+    TINYINT_UNSIGNED = auto()
+    SPATIAL_KEY = auto()
+    FULLTEXT_KEY = auto()
     THROW = auto()
     TO = auto()
     TOP = auto()
@@ -1203,5 +1205,4 @@ class Tokenizer(metaclass=_Tokenizer):
                 current = self._current - 1
                 self._advance(alnum=True)
                 text += self.sql[current : self._current - 1]
-
         return text

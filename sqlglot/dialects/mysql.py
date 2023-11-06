@@ -132,9 +132,11 @@ class MySQL(Dialect):
             "MEDIUMTEXT": TokenType.MEDIUMTEXT,
             "TINYTEXT": TokenType.TINYTEXT,
             "MEDIUMINT": TokenType.MEDIUMINT,
-            "POINT" : TokenType.POINT,
+            "POINT": TokenType.POINT,
             "INT UNSIGNED": TokenType.INT_UNSIGNED,
             "SMALLINT UNSIGNED": TokenType.SMALLINT_UNSIGNED,
+            "BIGINT UNSIGNED": TokenType.BIGINT_UNSIGNED,
+            "TINYINT UNSIGNED": TokenType.TINYINT_UNSIGNED,
             "SEPARATOR": TokenType.SEPARATOR,
             "ENUM": TokenType.ENUM,
             "START": TokenType.BEGIN,
@@ -424,17 +426,21 @@ class MySQL(Dialect):
             spatialkey_name = self._parse_id_var()
             spatial_col_name = self._parse_bitwise()
 
-            return self.expression(exp.SpatialKey, this=True, spatialkeyname=spatialkey_name,spatialcolname=spatial_col_name )
+            return self.expression(
+                exp.SpatialKey,
+                this=True,
+                spatialkeyname=spatialkey_name,
+                spatialcolname=spatial_col_name,
+            )
 
         def _parse_fulltext_key(self) -> exp.FullTextKey:
             self._match(TokenType.FULLTEXT_KEY)
             keyname = self._parse_id_var()
             colname = self._parse_bitwise()
 
-            return self.expression(exp.FullTextKey, this=True,keyname=keyname, colname=colname )
+            return self.expression(exp.FullTextKey, this=True, keyname=keyname, colname=colname)
 
-
-        def _parse_key_index(self) ->exp.KeyColumnConstraintForIndex:
+        def _parse_key_index(self) -> exp.KeyColumnConstraintForIndex:
             self._match(TokenType.KEY)
             desc = False
             idx_name = self._parse_id_var()
@@ -442,10 +448,17 @@ class MySQL(Dialect):
             if self._match_texts("USING"):
                 opts = f"USING {self._parse_bitwise()}"
             else:
-                opts = False
+                opts = None
             if self._match_texts("DESC"):
                 desc = True
-            return self.expression(exp.KeyColumnConstraintForIndex, this=True, desc = {desc}, keyname=idx_name, colname=col_name, options=opts)
+            return self.expression(
+                exp.KeyColumnConstraintForIndex,
+                this=True,
+                desc={desc},
+                keyname=idx_name,
+                colname=col_name,
+                options=opts,
+            )
 
         def _parse_lock_tables(self) -> exp.ExclusiveLock:
             self._match(TokenType.LOCK)

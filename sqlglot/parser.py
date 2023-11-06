@@ -143,6 +143,8 @@ class Parser(metaclass=_Parser):
         TokenType.POINT,
         TokenType.INT_UNSIGNED,
         TokenType.SMALLINT_UNSIGNED,
+        TokenType.BIGINT_UNSIGNED,
+        TokenType.TINYINT_UNSIGNED,
         TokenType.MEDIUMBLOB,
         TokenType.LONGBLOB,
         TokenType.BINARY,
@@ -696,6 +698,7 @@ class Parser(metaclass=_Parser):
         "TTL": lambda self: self.expression(exp.MergeTreeTTL, expressions=[self._parse_bitwise()]),
         "UNIQUE": lambda self: self._parse_unique(),
         "UPPERCASE": lambda self: self.expression(exp.UppercaseColumnConstraint),
+        "KEY": lambda self: self._parse_key_index(),
     }
 
     ALTER_PARSERS = {
@@ -706,7 +709,16 @@ class Parser(metaclass=_Parser):
         "RENAME": lambda self: self._parse_alter_table_rename(),
     }
 
-    SCHEMA_UNNAMED_CONSTRAINTS = {"CHECK", "FOREIGN KEY", "LIKE", "PRIMARY KEY", "UNIQUE", "KEY", "SPATIAL KEY", "FULLTEXT KEY"}
+    SCHEMA_UNNAMED_CONSTRAINTS = {
+        "CHECK",
+        "FOREIGN KEY",
+        "LIKE",
+        "PRIMARY KEY",
+        "UNIQUE",
+        "KEY",
+        "SPATIAL KEY",
+        "FULLTEXT KEY",
+    }
 
     NO_PAREN_FUNCTION_PARSERS = {
         TokenType.ANY: lambda self: self.expression(exp.Any, this=self._parse_bitwise()),
@@ -1577,18 +1589,18 @@ class Parser(metaclass=_Parser):
         self._match(TokenType.EQ)
         subpartition_exp_list = []
         subpartition = False
-        type = ""
-        partition_name = ""
-        subpartition_name = ""
-        values = ""
-        subpart_range = ""
-        storage_engine = ""
+        type = None
+        partition_name = None
+        subpartition_name = None
+        values = None
+        subpart_range = None
+        storage_engine = None
         found_str_engine = False
-        expr = ""
-        count_partitions= 1
-
+        expr = None
+        count_partitions = "1"
+        main_part = None
         if self._match_texts("LIST"):
-            type="LIST"
+            type = "LIST"
             if self._match(TokenType.L_PAREN):
                 expr = self._parse_schema() or self._parse_bracket(self._parse_field())
                 self._match(TokenType.R_PAREN)
@@ -1596,10 +1608,10 @@ class Parser(metaclass=_Parser):
                 expr = self._parse_schema() or self._parse_bracket(self._parse_field())
             main_part = expr
 
-        if self._match_texts("RANGE"):
-            type="RANGE"
+        elif self._match_texts("RANGE"):
+            type = "RANGE"
             if self._match_texts("COLUMNS"):
-                type="RANGE COLUMNS"
+                type = "RANGE COLUMNS"
                 self.raise_error("Range column partition is not supported")
 
             if self._match(TokenType.L_PAREN):
@@ -1609,8 +1621,8 @@ class Parser(metaclass=_Parser):
                 expr = self._parse_schema() or self._parse_bracket(self._parse_field())
             main_part = expr
 
-        if self._match_texts("KEY"):
-            type="KEY"
+        elif self._match(TokenType.KEY):
+            type = "KEY"
             if self._match(TokenType.L_PAREN):
                 expr = self._parse_bitwise()
                 self._match(TokenType.R_PAREN)
@@ -1619,19 +1631,27 @@ class Parser(metaclass=_Parser):
             if expr:
                 main_part = expr
             else:
-                main_part = ""
+                main_part = None
 
             if self._match_texts("PARTITIONS"):
-                count_partitions = str(self._parse_schema() or self._parse_bracket(self._parse_field()))
+                count_partitions = str(
+                    self._parse_schema() or self._parse_bracket(self._parse_field())
+                )
 
-        if self._match_texts("HASH"):
-            type="HASH"
+        elif self._match_texts("HASH"):
+            type = "HASH"
             expr = self._parse_schema() or self._parse_bracket(self._parse_field())
             main_part = expr
             if self._match_texts("PARTITIONS"):
-                count_partitions = str(self._parse_schema() or self._parse_bracket(self._parse_field()))
+                count_partitions = str(
+                    self._parse_schema() or self._parse_bracket(self._parse_field())
+                )
 
-        #parsing sub-partitions
+        else:
+            expr = self._parse_schema() or self._parse_bracket(self._parse_field())
+            main_part = expr
+
+        # parsing sub-partitions
         if self._match(TokenType.L_PAREN):
             subpartition = True
             while self._match_texts("PARTITION") and self._next:
@@ -1640,31 +1660,39 @@ class Parser(metaclass=_Parser):
                 subpartition_name = partition_name
                 if self._match_texts("VALUES"):
                     if self._match_text_seq("LESS", "THAN"):
-                        subpart_range= "LESS THAN"
+                        subpart_range = "LESS THAN"
                         if self._match(TokenType.L_PAREN):
                             values = f"({self._parse_bitwise()})"
                             self._match(TokenType.R_PAREN)
                         else:
                             values = f"({self._parse_bitwise()})"
                     if self._match_text_seq("MORE", "THAN"):
-                        values = self._parse_schema() or self._parse_bracket(self._parse_field())
+                        values = (
+                            f"{self._parse_schema() or self._parse_bracket(self._parse_field())}"
+                        )
+
                         subpart_range = "MORE THAN"
                     if self._match_texts("IN"):
                         subpart_range = "IN"
-                        values = self._parse_schema() or self._parse_bracket(self._parse_field())
+                        values = (
+                            f"{self._parse_schema() or self._parse_bracket(self._parse_field())}"
+                        )
+
                 if self._match_text_seq("STORE", "IN"):
                     found_str_engine = True
-                    storage_engine = self._parse_schema() or self._parse_bracket(self._parse_field())
+                    storage_engine = (
+                        f"{self._parse_schema() or self._parse_bracket(self._parse_field())}"
+                    )
+
                     if storage_engine is None:
-                        storage_engine = "UNPARTITONED"
+                        storage_engine = f"UNPARTITONED"  # type:ignore
                 if storage_engine is None or found_str_engine is False:
-                    storage_engine = "UNPARTITIONED"
+                    storage_engine = f"UNPARTITIONED"  # type:ignore
 
                 subpartition_exp = f"PARTITION {subpartition_name} VALUES {subpart_range} {values} STORE IN {storage_engine}"
                 subpartition_exp_list.append(subpartition_exp)
                 self._match(TokenType.COMMA)
             self._match(TokenType.R_PAREN)
-
 
         return self.expression(
             exp.PartitionedByProperty,
@@ -1676,6 +1704,25 @@ class Parser(metaclass=_Parser):
             count_partitions=count_partitions,
         )
 
+    def _parse_key_index(self) -> exp.KeyColumnConstraintForIndex:
+        self._match(TokenType.KEY)
+        desc = False
+        idx_name = self._parse_id_var()
+        col_name = self._parse_bitwise()
+        if self._match_texts("USING"):
+            opts = f"USING {self._parse_bitwise()}"
+        else:
+            opts = None
+        if self._match_texts("DESC"):
+            desc = True
+        return self.expression(
+            exp.KeyColumnConstraintForIndex,
+            this=True,
+            desc={desc},
+            keyname=idx_name,
+            colname=col_name,
+            options=opts,
+        )
 
     def _parse_withdata(self, no: bool = False) -> exp.WithDataProperty:
         if self._match_text_seq("AND", "STATISTICS"):
@@ -3222,7 +3269,6 @@ class Parser(metaclass=_Parser):
         if self._match_set(self.PRIMARY_PARSERS):
             token_type = self._prev.token_type
             primary = self.PRIMARY_PARSERS[token_type](self, self._prev)
-
             if token_type == TokenType.STRING:
                 expressions = [primary]
                 while self._match(TokenType.STRING):
@@ -3284,7 +3330,6 @@ class Parser(metaclass=_Parser):
     ) -> t.Optional[exp.Expression]:
         if not self._curr:
             return None
-
         token_type = self._curr.token_type
 
         if optional_parens and self._match_set(self.NO_PAREN_FUNCTION_PARSERS):

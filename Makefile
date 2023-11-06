@@ -13,6 +13,9 @@ install-pre-commit:
 test:
 	python -m unittest
 
+unit:
+	SKIP_INTEGRATION=1 python -m unittest
+
 style:
 	pre-commit run --all-files
 

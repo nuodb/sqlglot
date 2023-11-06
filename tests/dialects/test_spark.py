@@ -64,6 +64,7 @@ class TestSpark(Validator):
 )""",  # Partition columns should exist in table
                 "presto": """CREATE TABLE blah (
   col_a INTEGER,
+  date VARCHAR,
   date VARCHAR
 )
 COMMENT='Test comment: blah'

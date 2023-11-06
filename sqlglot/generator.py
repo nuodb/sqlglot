@@ -14,6 +14,8 @@ logger = logging.getLogger("sqlglot")
 global need_fk_for_index, exclude_fk_constraint
 need_fk_for_index = False
 exclude_fk_constraint = False
+
+
 class Generator:
     """
     Generator converts a given syntax tree to the corresponding SQL string.
@@ -158,7 +160,9 @@ class Generator:
         exp.DataType.Type.INET: "INET",
         exp.DataType.Type.POINT: "POINT",
         exp.DataType.Type.INT_UNSIGNED: "INT UNSIGNED",
-        exp.DataType.Type.SMALLINT_UNSIGNED: "SMALLINT UNSIGNED"
+        exp.DataType.Type.SMALLINT_UNSIGNED: "SMALLINT UNSIGNED",
+        exp.DataType.Type.TINYINT_UNSIGNED: "TINYINT UNSIGNED",
+        exp.DataType.Type.BIGINT_UNSIGNED: "BIGINT UNSIGNED",
     }
 
     STAR_MAPPING = {
@@ -309,7 +313,7 @@ class Generator:
         "_escaped_quote_end",
         "_escaped_identifier_end",
         "_cache",
-        )
+    )
 
     def __init__(
         self,
@@ -354,7 +358,7 @@ class Generator:
         self,
         expression: t.Optional[exp.Expression],
         cache: t.Optional[t.Dict[int, str]] = None,
-        **opts
+        **opts,
     ) -> str:
         """
         Generates the SQL string corresponding to the given syntax tree.
@@ -376,7 +380,6 @@ class Generator:
         if fk_constraint_in_create is not None:
             exclude_fk_constraint = fk_constraint_in_create
 
-
         if cache is not None:
             self._cache = cache
         self.unsupported_messages = []
@@ -395,7 +398,6 @@ class Generator:
         if self.pretty:
             sql = sql.replace(self.SENTINEL_LINE_BREAK, "\n")
         return sql
-
 
     def unsupported(self, message: str) -> None:
         if self.unsupported_level == ErrorLevel.IMMEDIATE:
@@ -543,16 +545,13 @@ class Generator:
         return f"UNCACHE TABLE{exists_sql} {table}"
 
     def keycolumnconstraintforindex_sql(self, expression: exp.KeyColumnConstraintForIndex) -> str:
-        exp = expression.args.get("expression")
-        desc = expression.args.get("desc")
         key_name = expression.args.get("keyname")
         col_name = expression.args.get("colname")
-        opts= expression.args.get("options")
-        if opts is False:
-            return f"KEY {key_name} {col_name}"
-        else:
+        opts = expression.args.get("options")
+        if opts is False and not None:
             return f"KEY {key_name} {col_name} {opts}"
-
+        else:
+            return f"KEY {key_name} {col_name}"
 
     def spatialkey_sql(self, expression: exp.SpatialKey) -> str:
         spatialkeyname = expression.args.get("spatialkeyname")
@@ -644,7 +643,7 @@ class Generator:
         cycle = expression.args.get("cycle")
         cycle_sql = ""
         stored = None
-        stored =expression.args.get("stored")
+        stored = expression.args.get("stored")
         if cycle is not None:
             cycle_sql = f"{' NO' if not cycle else ''} CYCLE"
             cycle_sql = cycle_sql.strip() if not start and not increment else cycle_sql
@@ -656,7 +655,7 @@ class Generator:
 
         expr = self.sql(expression, "expression")
         expr = f"({expr})" if expr else "IDENTITY"
-        if stored or stored is False:
+        if stored is None or stored is False:
             return f"GENERATED{this}AS {expr}{sequence_opts}"
         else:
             return f"GENERATED{this}AS {expr}{sequence_opts} {stored}"
@@ -676,10 +675,10 @@ class Generator:
         return f"UNIQUE{this}"
 
     def unsupportednuodb_sql(self, expression: exp.UnsupportedNuodb) -> str:
-            unsupported_feature = expression.args["this"]
-            if unsupported_feature:
-                message = expression.args["message"]
-            return message
+        unsupported_feature = expression.args["this"]
+        if unsupported_feature:
+            message = expression.args["message"]
+        return message
 
     def createable_sql(
         self, expression: exp.Create, locations: dict[exp.Properties.Location, list[exp.Property]]
@@ -777,19 +776,17 @@ class Generator:
             foreign_key_ind = expression.foreign_key_index
             if foreign_key_ind and foreign_key_ind != "":
                 for index_sql in foreign_key_ind:
-                    if index_sql!="":
+                    if index_sql != "":
                         create_table_exp += ";\n" + index_sql
 
         if exclude_fk_constraint is True:
             alter_fk_constraint = expression.foreign_key_constraint
             if alter_fk_constraint:
                 for constraint_sql in alter_fk_constraint:
-                    if constraint_sql!= "":
+                    if constraint_sql != "":
                         create_table_exp += ";\n" + constraint_sql
 
-
         return create_table_exp
-
 
     def clone_sql(self, expression: exp.Clone) -> str:
         this = self.sql(expression, "this")
@@ -2020,11 +2017,8 @@ class Generator:
 
     def alias_sql(self, expression: exp.Alias) -> str:
         alias = self.sql(expression, "alias")
-        if not TokenType.KEY:
-            alias = f" AS {alias}" if alias else ""
-            return f"{self.sql(expression, 'this')}{alias}"
-        else:
-            return f"{self.sql(expression, 'this')} {alias}"
+        alias = f"AS {alias}" if alias else ""
+        return f"{self.sql(expression, 'this')} {alias}"
 
     def aliases_sql(self, expression: exp.Aliases) -> str:
         return f"{self.sql(expression, 'this')} AS ({self.expressions(expression, flat=True)})"
@@ -2174,7 +2168,8 @@ class Generator:
         if need_fk_for_index:
             if expression.args.get("foreign_key_index"):
                 foreign_index_exp = expression.args.get("foreign_key_index")
-                alterTable_sql +=";\n" + foreign_index_exp
+                if foreign_index_exp is not None:
+                    alterTable_sql += ";\n" + foreign_index_exp
         return alterTable_sql
 
     def droppartition_sql(self, expression: exp.DropPartition) -> str:

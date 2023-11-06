@@ -299,7 +299,7 @@ FROM v""",
         self.validate("CAST(x AS INT)::BOOLEAN", "CAST(CAST(x AS INT) AS BOOLEAN)")
 
         with self.assertRaises(ParseError):
-            transpile("x::z")
+            transpile("x::z", read="duckdb")
 
     def test_not_range(self):
         self.validate("a NOT LIKE b", "NOT a LIKE b")
