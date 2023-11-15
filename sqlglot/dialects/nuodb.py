@@ -11,7 +11,6 @@ schema_name = None
 
 def _parse_introducer(self: generator.Generator, expression: exp.Expression) -> exp.Expression:
     expression.args["this"] = None
-
     return expression
 
 
@@ -98,30 +97,32 @@ def _parse_foreign_key_index(
             if foreign_key_expression:
                 for fk in foreign_key_expression:
                     tbl_name = expression.parent.args["this"]
-                    column_name = fk.args["expressions"][0]
-                    index_name = f"{tbl_name}_{column_name}"
-                    index_name = index_name.replace('"', "")
-                    constraint_name = expression.args["this"]
-                    if len(key_col_map) != 0:
-                        for idx_name, key_name in key_col_map.items():
-                            if str(column_name) == str(key_name) or str(idx_name) == str(
-                                constraint_name
-                            ):
-                                index_foreign_key_sql = ""
-                                break
-                            else:
-                                index_foreign_key_sql = (
-                                    f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
-                                )
-                    else:
-                        index_foreign_key_sql = (
-                            f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
-                        )
-                    if schema_name:
-                        alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD {expression}"
-                    else:
-                        alter_table = f"ALTER TABLE {tbl_name} ADD {expression}"
-                    expression.parent.parent.add_foreign_key_index(index_foreign_key_sql)
+                    # multiple columnss
+                    for f in fk.args["expressions"]:
+                        column_name = f.this
+                        index_name = f"{tbl_name}_{column_name}"
+                        index_name = index_name.replace('"', "")
+                        constraint_name = expression.args["this"]
+                        if len(key_col_map) != 0:
+                            for idx_name, key_name in key_col_map.items():
+                                if str(column_name) == str(key_name) or str(idx_name) == str(
+                                    constraint_name
+                                ):
+                                    index_foreign_key_sql = ""
+                                    break
+                                else:
+                                    index_foreign_key_sql = (
+                                        f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
+                                    )
+                        else:
+                            index_foreign_key_sql = (
+                                f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
+                            )
+                        if schema_name:
+                            alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD {expression}"
+                        else:
+                            alter_table = f"ALTER TABLE {tbl_name} ADD {expression}"
+                        expression.parent.parent.add_foreign_key_index(index_foreign_key_sql)
                     expression.parent.parent.add_foreign_key_constraint(alter_table)
 
     if isinstance(expression.parent, exp.AlterTable):
@@ -312,6 +313,10 @@ def _remove_collate(expression: exp.Expression) -> exp.Expression:
     compColumn = expression.find_all(exp.GeneratedAsIdentityColumnConstraint)
     if compColumn:
         for col in compColumn:
+            introducers = col.find_all(exp.Introducer)
+            if introducers:
+                for i in introducers:
+                    i.args["this"] = None
             if col.args["this"]:
                 if col.args["stored"].name == "VIRTUAL" or col.args["stored"].name == "STORED":
                     col.args["stored"] = exp.Identifier(this="PERSISTED")
@@ -428,7 +433,7 @@ class NuoDB(Dialect):
             exp.SpatialKey: _parse_spatial_key,
             exp.UniqueColumnConstraint: _parse_unique,
             exp.FullTextKey: _parse_fulltext_key,
-            exp.Introducer: _parse_introducer,
+            # exp.Introducer: _parse_introducer,
         }
         TYPE_MAPPING = {
             **generator.Generator.TYPE_MAPPING,
