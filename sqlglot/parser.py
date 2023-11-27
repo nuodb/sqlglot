@@ -145,6 +145,7 @@ class Parser(metaclass=_Parser):
         TokenType.SMALLINT_UNSIGNED,
         TokenType.BIGINT_UNSIGNED,
         TokenType.TINYINT_UNSIGNED,
+        TokenType.SET,
         TokenType.MEDIUMBLOB,
         TokenType.LONGBLOB,
         TokenType.BINARY,
