@@ -161,14 +161,20 @@ def _parse_partition_hash(self: generator.Generator, expression: exp.Expression)
     schema = expression.this
     partition_exp = expression.find_all(exp.PartitionedByProperty)
     for p in partition_exp:
+        function_exp = p.find_all(exp.Func)
         col_name = p.args["this"]
+        exprssion_col_name = p.args["this"]
+        if function_exp:
+            for fun in function_exp:
+                col_name = fun.args["this"]
+                col_name = col_name.this
         partition_col_name = f"p_{col_name}"
         partition_col = exp.ColumnDef(this=partition_col_name, kind="INT")
         partition_col.append(
             "constraints",
             exp.ColumnConstraint(
                 kind=exp.GeneratedAsIdentityColumnConstraint(
-                    this=True, expression=f"{col_name}%4", stored=exp.Identifier(this="PERSISTED")
+                    this=True, expression=f"{exprssion_col_name}%4", stored=exp.Identifier(this="PERSISTED")
                 )
             ),
         )
@@ -180,32 +186,35 @@ def _parse_partition_hash(self: generator.Generator, expression: exp.Expression)
             part_name = f"p{i}"
             sub_exp = f"PARTITION {part_name} VALUES IN ({i}) STORE IN UNPARTITIONED"
             sub_part_list.append(sub_exp)
+        p.args["main_partition"] = partition_col_name
         p.args["subpart_exp"] = sub_part_list
         p.args["type"] = "LIST"
         p.args["subpartition"] = True
 
 
 def _parse_partition_key(self: generator.Generator, expression: exp.Expression):
-    primaryKey_exp = expression.find_all(exp.PrimaryKey)
-    uniqueKey_exp = expression.find_all(exp.UniqueColumnConstraint)
 
+    column_constraint = expression.find_all(exp.ColumnDef)
+    partition_key_column_name = None
     partition_exp = expression.find_all(exp.PartitionedByProperty)
-    partition_key_column_name = ""
-    if primaryKey_exp:
-        for prim in primaryKey_exp:
-            if prim:
-                prim_this = prim.args["expressions"][0]
-                partition_key_column_name = f"({prim_this})"
-
-    if partition_key_column_name == "":
-        for unique in uniqueKey_exp:
-            partition_key_column_name = f"{unique.this}"
+    unique_key_exp = expression.find_all(exp.UniqueColumnConstraint)
 
     for p in partition_exp:
         part_col = p.args["main_partition"]
         count_partitions = p.args["count_partitions"]
-        if part_col:
+        if part_col and part_col != "":
             partition_key_column_name = part_col
+        else:
+            if column_constraint:
+                for col in column_constraint:
+                    constraints = col.args["constraints"]
+                    for const in constraints:
+                        if isinstance(const.kind, exp.PrimaryKeyColumnConstraint):
+                            partition_key_column_name = col.args["this"]
+                        elif unique_key_exp:
+                            for uniq in unique_key_exp:
+                                partition_key_column_name = col.args["this"]
+
         sub_part_list = []
         for i in range(0, int(count_partitions)):
             part_name = f"p{i}"
@@ -214,10 +223,8 @@ def _parse_partition_key(self: generator.Generator, expression: exp.Expression):
         p.args["type"] = "LIST"
         p.args["subpartition"] = True
         p.args["subpart_exp"] = sub_part_list
-        if part_col:
-            p.args["main_partition"] = f"{partition_key_column_name}"
-        else:
-            p.args["main_partition"] = f"{partition_key_column_name}"
+
+        p.args["main_partition"] = f"{partition_key_column_name}"
 
 
 def _parse_partition_range(self: generator.Generator, expression: exp.Expression):
@@ -431,7 +438,7 @@ class NuoDB(Dialect):
             exp.AddConstraint: _parse_foreign_key_index,
             exp.Constraint: _parse_foreign_key_index,
             exp.SpatialKey: _parse_spatial_key,
-            exp.UniqueColumnConstraint: _parse_unique,
+            # exp.UniqueColumnConstraint: _parse_unique,
             exp.FullTextKey: _parse_fulltext_key,
             # exp.Introducer: _parse_introducer,
         }

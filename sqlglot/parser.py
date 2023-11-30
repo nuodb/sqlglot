@@ -1622,6 +1622,10 @@ class Parser(metaclass=_Parser):
                 expr = self._parse_schema() or self._parse_bracket(self._parse_field())
             main_part = expr
 
+        elif self._match_texts("LINEAR"):
+            if self._match_texts("KEY"):
+                raise ParseError("LINEAR KEY partition is not supported")
+
         elif self._match(TokenType.KEY):
             type = "KEY"
             if self._match(TokenType.L_PAREN):
@@ -1632,7 +1636,7 @@ class Parser(metaclass=_Parser):
             if expr:
                 main_part = expr
             else:
-                main_part = None
+                main_part = ""
 
             if self._match_texts("PARTITIONS"):
                 count_partitions = str(
@@ -1641,7 +1645,11 @@ class Parser(metaclass=_Parser):
 
         elif self._match_texts("HASH"):
             type = "HASH"
-            expr = self._parse_schema() or self._parse_bracket(self._parse_field())
+            if self._match(TokenType.L_PAREN):
+                expr = self._parse_bitwise()
+                self._match(TokenType.R_PAREN)
+            else:
+                expr = self._parse_schema() or self._parse_bracket(self._parse_bitwise())
             main_part = expr
             if self._match_texts("PARTITIONS"):
                 count_partitions = str(
@@ -1651,7 +1659,6 @@ class Parser(metaclass=_Parser):
         else:
             expr = self._parse_schema() or self._parse_bracket(self._parse_field())
             main_part = expr
-
         # parsing sub-partitions
         if self._match(TokenType.L_PAREN):
             subpartition = True
