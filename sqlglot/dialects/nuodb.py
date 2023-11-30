@@ -236,7 +236,7 @@ def _parse_partition_range(self: generator.Generator, expression: exp.Expression
         if function_exp:
             for fun in function_exp:
                 col_name = fun.args["this"]
-                partition_col_name = f"p_{col_name}"
+                partition_col_name = f"partition_col"
                 if fun in processed_functions:
                     continue
                 partition_column = exp.ColumnDef(this=partition_col_name, kind="INT")
