@@ -163,6 +163,8 @@ class Generator:
         exp.DataType.Type.SMALLINT_UNSIGNED: "SMALLINT UNSIGNED",
         exp.DataType.Type.TINYINT_UNSIGNED: "TINYINT UNSIGNED",
         exp.DataType.Type.BIGINT_UNSIGNED: "BIGINT UNSIGNED",
+        exp.DataType.Type.SET: "SET",
+
     }
 
     STAR_MAPPING = {

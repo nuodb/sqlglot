@@ -512,6 +512,12 @@ class NuoDB(Dialect):
                 expression = expression.copy()
                 expression.set("this", exp.DataType.Type.INT)
                 expression.args["expressions"] = None
+            if expression.is_type("int"):
+                expression = expression.copy()
+                expression.set("this", exp.DataType.Type.INT)
+                expression.args["expressions"] = None
+            if expression.is_type("set"):
+                raise UnsupportedError("SET COLUMN CONSTRAINT is not supported in NuoDB")
 
             return super().datatype_sql(expression)
 
