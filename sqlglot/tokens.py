@@ -843,8 +843,16 @@ class Tokenizer(metaclass=_Tokenizer):
         self.reset()
         self.sql = sql
         self.size = len(sql)
-
         try:
+            # mysql dumps partition details as conditional commands. The command starts with the same version number always, the below code is used to make it compatible with NuoDB
+            while self.sql.find("!50100") != -1:
+                index_50100 = self.sql.find("/*!50100")
+                if index_50100 != -1:
+                    index_close_comment = self.sql.find("*/", index_50100)
+                    if index_close_comment != -1:
+                        sql = self.sql[:index_close_comment] + self.sql[index_close_comment + 2:]
+                        self.sql = sql.replace("/*!50100", "", 1)
+            self.size = len(self.sql)
             self._scan()
         except Exception as e:
             start = max(self._current - 50, 0)
