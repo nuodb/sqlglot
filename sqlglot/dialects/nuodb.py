@@ -154,6 +154,12 @@ def _auto_increment_to_generated_by_default(expression: exp.Expression) -> exp.E
         if generated not in constraints:
             constraints.insert(0, generated)
 
+    generatedColumn = expression.find(exp.GeneratedAsIdentityColumnConstraint)
+    if generatedColumn:
+        if generatedColumn.args["this"] is False:
+            if generatedColumn.args["start"] is not None or False:
+                generatedColumn.args["start"] = False
+
     return expression
 
 
@@ -403,6 +409,7 @@ class NuoDB(Dialect):
             "_UTF16LE": TokenType.INTRODUCER,
             "_UTF32": TokenType.INTRODUCER,
             "_UTF8MB3": TokenType.INTRODUCER,
+            "VARCHAR2": TokenType.VARCHAR,
             "_UTF8MB4": TokenType.INTRODUCER,
         }
 
@@ -456,6 +463,8 @@ class NuoDB(Dialect):
             exp.DataType.Type.BIGINT_UNSIGNED: "BIGINT",
             exp.DataType.Type.TINYINT_UNSIGNED: "INTEGER",
             exp.DataType.Type.SMALLINT: "SMALLINT",
+            exp.DataType.Type.VARCHAR: "VARCHAR"
+
             # ? Revise below and add
             # exp.DataType.Type.TINYINT: "INT64",
             # exp.DataType.Type.SMALLINT: "INT64",
