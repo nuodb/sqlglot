@@ -1699,6 +1699,10 @@ class Parser(metaclass=_Parser):
 
                 subpartition_exp = f"PARTITION {subpartition_name} VALUES {subpart_range} {values} STORE IN {storage_engine}"
                 subpartition_exp_list.append(subpartition_exp)
+
+                if self._match_texts("ENGINE"):
+                    if self._match(TokenType.EQ):
+                        engine = self._parse_schema() or self._parse_bracket(self._parse_field())
                 self._match(TokenType.COMMA)
             self._match(TokenType.R_PAREN)
 
