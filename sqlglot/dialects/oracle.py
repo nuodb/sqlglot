@@ -75,6 +75,39 @@ class Oracle(Dialect):
             )
         }
 
+        def _parse_generated_as_identity(self) -> exp.GeneratedAsIdentityColumnConstraint:
+            if self._match_text_seq("BY", "DEFAULT"):
+                on_null = self._match_pair(TokenType.ON, TokenType.NULL)
+                this = self.expression(
+                    exp.GeneratedAsIdentityColumnConstraint, this=False, on_null=on_null
+                )
+            else:
+                self._match_text_seq("ALWAYS")
+                this = self.expression(exp.GeneratedAsIdentityColumnConstraint, this=True)
+            self._match(TokenType.ALIAS)
+            identity = self._match_text_seq("IDENTITY")
+
+            if self._match_text_seq("START", "WITH"):
+                this.set("start", self._parse_bitwise())
+            if self._match_text_seq("INCREMENT", "BY"):
+                this.set("increment", self._parse_bitwise())
+            if self._match_text_seq("MINVALUE"):
+                this.set("minvalue", self._parse_bitwise())
+            if self._match_text_seq("MAXVALUE"):
+                this.set("maxvalue", self._parse_bitwise())
+
+            if self._match_text_seq("CYCLE"):
+                this.set("cycle", True)
+            elif self._match_text_seq("NO", "CYCLE"):
+                this.set("cycle", False)
+
+            if not identity:
+                this.set("expression", self._parse_bitwise())
+            storage = self._parse_bitwise()
+            if storage:
+                this.set("stored", storage)
+            return this
+
         def _parse_column(self) -> t.Optional[exp.Expression]:
             column = super()._parse_column()
             if column:
