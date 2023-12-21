@@ -197,6 +197,9 @@ class Oracle(Dialect):
     class Tokenizer(tokens.Tokenizer):
         VAR_SINGLE_TOKENS = {"@"}
 
+        COMMENTS = ["--", "//", ("/*", "*/"), ("/* !", "*/;"), ("/* !50100", "*/;"), ("REM"), ("Rem")]
+
+
         KEYWORDS = {
             **tokens.Tokenizer.KEYWORDS,
             "(+)": TokenType.JOIN_MARKER,
@@ -211,3 +214,15 @@ class Oracle(Dialect):
             "TOP": TokenType.TOP,
             "VARCHAR2": TokenType.VARCHAR,
         }
+
+        def _scan_var(self) -> None:
+            while True:
+                char = self._peek.strip()
+                if char and (char in self.VAR_SINGLE_TOKENS or char not in self.SINGLE_TOKENS):
+                    self._advance(alnum=True)
+                else:
+                    break
+            if self._text not in self._COMMENTS:
+                self._add(TokenType.VAR if self.tokens and self.tokens[-1].token_type == TokenType.PARAMETER else self.KEYWORDS.get(self._text.upper(), TokenType.VAR))
+            else:
+                self._scan_comment(self._text)
