@@ -64,6 +64,80 @@ def no_properties_sql(self: generator.Generator, expression: exp.Properties) -> 
     self.unsupported("Properties unsupported")
     return ""
 
+def _parse_fk(self: generator.Generator, expression: exp.Expression) -> exp.Expression | None:
+    if expression.parent:
+        if isinstance(expression.parent.parent, exp.Create):
+            global schema_name
+            index_foreign_key_sql = ""
+            alter_table = ""
+            key_name = ""
+            foreign_key_expression = expression.find_all(exp.ForeignKey)
+
+            Key_constraint_index = expression.parent.parent.find_all(
+                exp.KeyColumnConstraintForIndex
+            )
+            key_col_map = {}
+
+            ref_key_index = expression.find_all(exp.Reference)
+            if ref_key_index:
+                for r in ref_key_index:
+                    options_list = r.args.get("options", [])
+                    if options_list and len(options_list) > 0:
+                        first_option = options_list[0]
+                        r.args["options"] = [first_option]
+
+            for k in Key_constraint_index:
+                idx_name = str(k.args.get("keyname"))
+                key_name = k.args["colname"]
+                key_name = key_name.this  # type: ignore
+                key_col_map[str(idx_name)] = str(key_name)
+            if foreign_key_expression:
+                for fk in foreign_key_expression:
+                    tbl_name = expression.parent.args["this"]
+                    # multiple columnss
+                    for f in fk.args["expressions"]:
+                        column_name = f
+                        index_name = f"{tbl_name}_{column_name}"
+                        index_name = index_name.replace('"', "")
+                        # constraint_name = expression.args["this"]
+                        constraint_name = f"{column_name}_fk"
+                        if len(key_col_map) != 0:
+                            for idx_name, key_name in key_col_map.items():
+                                if str(column_name) == str(key_name) or str(idx_name) == str(
+                                    constraint_name
+                                ):
+                                    index_foreign_key_sql = ""
+                                    break
+                                else:
+                                    index_foreign_key_sql = (
+                                        f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
+                                    )
+                        else:
+                            index_foreign_key_sql = (
+                                f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
+                            )
+                        if schema_name:
+                            alter_table = f"ALTER TABLE {schema_name}.{tbl_name} ADD CONSTRAINT {constraint_name} {expression}"
+                        else:
+                            alter_table = f"ALTER TABLE {tbl_name} ADD CONSTRAINT {constraint_name} {expression}"
+                        expression.parent.parent.add_foreign_key_index(index_foreign_key_sql)
+                    expression.parent.parent.add_foreign_key_constraint(alter_table)
+
+    if isinstance(expression.parent, exp.AlterTable):
+        foreign_key_expression = expression.find_all(exp.ForeignKey)
+        index_foreign_key_sql = ""
+        if foreign_key_expression:
+            for fk in foreign_key_expression:
+                tbl_name = expression.parent.args["this"]
+                column_name = fk.args["expressions"][0]
+                index_name = f"{tbl_name}_{column_name}"
+                index_name = index_name.replace('"', "")
+                index_foreign_key_sql = f"CREATE INDEX {index_name} ON {tbl_name} ({column_name})"
+                expression.parent.set("foreign_key_index", index_foreign_key_sql)
+    if generator.exclude_fk_constraint:
+        return None
+
+    return expression
 
 def _parse_foreign_key_index(
     self: generator.Generator, expression: exp.Expression
@@ -444,6 +518,7 @@ class NuoDB(Dialect):
             exp.CommentColumnConstraint: no_comment_column_constraint_sql,
             exp.AddConstraint: _parse_foreign_key_index,
             exp.Constraint: _parse_foreign_key_index,
+            exp.ForeignKey: _parse_fk,
             exp.SpatialKey: _parse_spatial_key,
             # exp.UniqueColumnConstraint: _parse_unique,
             exp.FullTextKey: _parse_fulltext_key,
